@@ -1,6 +1,7 @@
 package com.example.data.models
 
 import com.example.data.local.entities.DownloadedModelEntity
+import com.example.data.local.entities.ModelType
 import com.example.vision.LocalVisionLlmEngine
 import java.io.File
 
