@@ -1,0 +1,15 @@
+{
+  "name": "Jarvis Local AI",
+  "description": "دستیار خودمختار و محلی Jarvis - اجرای واقعی دستورات ترموکس، مدیریت مدل‌های GGUF و لود در RAM، اتصال به بانک صادرات و امنیت اطلاعات",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "LOCAL_LLM_INFERENCE",
+    "LOCAL_VISION_INFERENCE",
+    "OFFLINE_VOICE_WHEN_INSTALLED",
+    "ANDROID_LOCAL_TOOLS",
+    "OPTIONAL_NETWORK_DOWNLOADS_AND_WEB"
+  ],
+  "phase": 45,
+  "title": "Offline Boundary Verification",
+  "phase_name": "Post-Transaction Evidence Gate"
+}

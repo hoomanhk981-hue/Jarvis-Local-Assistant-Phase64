@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Jarvis Local AI</string>
+    <string name="accessibility_service_description">Jarvis user-enabled accessibility bridge for reading and interacting with the active app.</string>
+</resources>
