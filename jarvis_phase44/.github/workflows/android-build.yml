@@ -64,11 +64,11 @@ jobs:
         working-directory: ${{ steps.locate.outputs.dir }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
-      - name: Copy & Rename APK for Artifacts
+      - name: Prepare APK for Artifacts & Release
         working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          find app/build/outputs/apk -name "*.apk" -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/apk-output/Jarvis-Local-Assistant.apk"
           ls -la "$GITHUB_WORKSPACE/apk-output/"
 
       - name: Upload Debug APK Artifact
@@ -77,3 +77,16 @@ jobs:
           name: Jarvis-Local-Assistant-APK
           path: apk-output/*.apk
           if-no-files-found: error
+
+      - name: Publish Direct APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: v1.0.0
+          name: "Jarvis Local Assistant v1.0.0 (APK)"
+          body: |
+            ### 🚀 دانلود مستقیم فایل نصبی APK برای اندروید
+            فایل `Jarvis-Local-Assistant.apk` را دانلود و روی گوشی خود نصب کنید.
+          files: apk-output/Jarvis-Local-Assistant.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
