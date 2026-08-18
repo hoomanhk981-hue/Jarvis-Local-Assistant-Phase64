@@ -10,7 +10,7 @@ sealed class ToolResult {
         val request: ConfirmationManager.Request? = null
     ) : ToolResult()
     data class NeedsPermission(val tool: String, val permissions: List<String>) : ToolResult()
-    data class Failure(val message: String) : ToolResult()
+    data class Failure(val message: String, val data: Map<String, String> = emptyMap()) : ToolResult()
 }
 
 interface JarvisTool {

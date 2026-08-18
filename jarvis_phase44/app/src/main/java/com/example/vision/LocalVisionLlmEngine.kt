@@ -1,16 +1,16 @@
 package com.example.vision
 
-import android.content.Context
-import android.net.Uri
-import java.io.ByteArrayOutputStream
-
 /**
  * JNI bridge to llama.cpp + libmtmd.
  * No model weights are packaged here: callers provide downloaded GGUF/mmproj paths.
  */
 class LocalVisionLlmEngine {
     companion object {
-        init { System.loadLibrary("jarvis_vision") }
+        init {
+            try {
+                System.loadLibrary("jarvis_vision")
+            } catch (_: UnsatisfiedLinkError) {}
+        }
     }
 
     private external fun nativeLoad(modelPath: String, mmprojPath: String, threads: Int, context: Int): Boolean
@@ -18,60 +18,27 @@ class LocalVisionLlmEngine {
     private external fun nativeRelease()
     private external fun nativeIsLoaded(): Boolean
 
-    fun load(modelPath: String, mmprojPath: String, threads: Int = 2, context: Int = 4096): Boolean =
+    fun load(modelPath: String, mmprojPath: String, threads: Int = 2, context: Int = 4096): Boolean = try {
         nativeLoad(modelPath, mmprojPath, threads, context)
+    } catch (_: UnsatisfiedLinkError) {
+        false
+    }
 
-    fun analyze(imageBytes: ByteArray, question: String, maxTokens: Int = 256): String =
+    fun analyze(imageBytes: ByteArray, question: String, maxTokens: Int = 256): String = try {
         nativeAnalyze(imageBytes, question, maxTokens)
-
-    fun isLoaded(): Boolean = nativeIsLoaded()
-    fun release() = nativeRelease()
-}
-
-class LocalVisionAnalyzer(private val context: Context) {
-    private val runtime = LocalVisionLlmEngine()
-
-    suspend fun analyze(uri: Uri, question: String, speedMode: String = "MEDIUM"): String {
-        val modelDir = java.io.File(context.filesDir, "ai_models")
-        val model = java.io.File(modelDir, "qwen2_vl_2b.gguf")
-        val mmproj = java.io.File(modelDir, "qwen2_vl_2b-mmproj-f16.gguf")
-        if (!model.isFile || model.length() == 0L) {
-            return "مدل Vision دانلود نشده است. از Model Manager مدل Vision و فایل mmproj آن را دانلود کنید."
-        }
-        if (!mmproj.isFile || mmproj.length() == 0L) {
-            return "فایل mmproj مدل Vision دانلود نشده است؛ بدون آن Vision Runtime فعال نمی‌شود."
-        }
-
-        val loaded = runtime.load(model.absolutePath, mmproj.absolutePath, threadsFor(speedMode), contextFor(speedMode))
-        if (!loaded) return "بارگذاری واقعی مدل Vision شکست خورد؛ سازگاری مدل و mmproj را بررسی کنید."
-
-        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-            ByteArrayOutputStream().use { out ->
-                input.copyTo(out)
-                out.toByteArray()
-            }
-        } ?: return "خواندن تصویر شکست خورد."
-
-        return runtime.analyze(bytes, question.ifBlank { "این تصویر را با جزئیات توصیف کن." }, maxTokensFor(speedMode))
+    } catch (e: UnsatisfiedLinkError) {
+        "Vision Runtime در این محیط در دسترس نیست."
     }
 
-    fun close() = runtime.release()
-
-    private fun threadsFor(mode: String): Int = when (mode.uppercase()) {
-        "LOW" -> 2
-        "HIGH" -> 6
-        else -> 4
+    fun isLoaded(): Boolean = try {
+        nativeIsLoaded()
+    } catch (_: UnsatisfiedLinkError) {
+        false
     }
 
-    private fun contextFor(mode: String): Int = when (mode.uppercase()) {
-        "LOW" -> 2048
-        "HIGH" -> 4096
-        else -> 3072
-    }
-
-    private fun maxTokensFor(mode: String): Int = when (mode.uppercase()) {
-        "LOW" -> 128
-        "HIGH" -> 384
-        else -> 256
+    fun release() {
+        try {
+            nativeRelease()
+        } catch (_: UnsatisfiedLinkError) {}
     }
 }

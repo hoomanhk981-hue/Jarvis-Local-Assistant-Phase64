@@ -305,7 +305,7 @@ $cmdToRun
             return try {
                 val prompt = buildString {
                     appendLine("User message: $input")
-                    appendLine("Response language: ${if (query.any { it in 'اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی' }) "Persian" else "English"}")
+                    appendLine("Response language: ${if (query.any { it in "اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی" }) "Persian" else "English"}")
                     appendLine("Speed mode: $speedMode")
                     appendLine("If the user asks you to perform an action, describe the required action only; do not claim that it happened.")
                 }

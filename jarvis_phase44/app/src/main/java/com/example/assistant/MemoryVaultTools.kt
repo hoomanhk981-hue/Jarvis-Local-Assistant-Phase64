@@ -11,7 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Password vault tools. Password plaintext is only returned when explicitly requested by the user flow. */
-class SavePasswordTool(context: Context) : JarvisTool {
+class SavePasswordTool(private val context: Context) : JarvisTool {
     override val name = "save_password"
     override val description = "Save an app/service password in the local encrypted vault. Explicit confirmation is required."
     private val dao = AppDatabase.getDatabase(context).savedPasswordDao()
@@ -25,7 +25,7 @@ class SavePasswordTool(context: Context) : JarvisTool {
     }
 }
 
-class GetPasswordTool(context: Context) : JarvisTool {
+class GetPasswordTool(private val context: Context) : JarvisTool {
     override val name = "get_password"
     override val description = "Retrieve a password from the encrypted local vault; requires explicit confirmation."
     private val dao = AppDatabase.getDatabase(context).savedPasswordDao()
@@ -43,7 +43,7 @@ class GetPasswordTool(context: Context) : JarvisTool {
 }
 
 /** Exports non-secret personal memory to a user-selected JSON document. Passwords are never exported plaintext. */
-class ExportMemoryJsonTool(context: Context) : JarvisTool {
+class ExportMemoryJsonTool(private val context: Context) : JarvisTool {
     override val name = "export_memory_json"
     override val description = "Export personal memory and non-secret metadata to JSON in the selected workspace."
     private val db = AppDatabase.getDatabase(context)

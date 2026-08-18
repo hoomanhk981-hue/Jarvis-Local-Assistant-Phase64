@@ -28,16 +28,20 @@ class VoicePackManager(private val context: Context) {
 
     fun status(): VoiceStatus {
         val recognizerAvailable = SpeechRecognizer.isRecognitionAvailable(context)
-        val offlineTts = runCatching { TextToSpeech(context) }.getOrNull()?.let { tts ->
-            val result = VoiceStatus(
+        val offlineTts = runCatching {
+            var faTts = false
+            var enTts = false
+            val tts = TextToSpeech(context) { /* init listener */ }
+            faTts = tts.voices?.any { !it.isNetworkConnectionRequired && it.locale.language == "fa" } == true
+            enTts = tts.voices?.any { !it.isNetworkConnectionRequired && it.locale.language == "en" } == true
+            tts.shutdown()
+            VoiceStatus(
                 speechRecognizerAvailable = recognizerAvailable,
                 offlineSpeechLikelyAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && recognizerAvailable,
-                offlinePersianTts = tts.voices?.any { !it.isNetworkConnectionRequired && it.locale.language == "fa" } == true,
-                offlineEnglishTts = tts.voices?.any { !it.isNetworkConnectionRequired && it.locale.language == "en" } == true
+                offlinePersianTts = faTts,
+                offlineEnglishTts = enTts
             )
-            tts.shutdown()
-            result
-        }
+        }.getOrNull()
         return offlineTts ?: VoiceStatus(
             speechRecognizerAvailable = recognizerAvailable,
             offlineSpeechLikelyAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && recognizerAvailable,
@@ -53,7 +57,7 @@ class VoicePackManager(private val context: Context) {
             putExtra("locale", locale.toLanguageTag())
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        startSafely(intent, Settings.ACTION_TEXT_TO_SPEECH_SETTINGS)
+        startSafely(intent, "com.android.settings.TTS_SETTINGS")
     }
 
     /**

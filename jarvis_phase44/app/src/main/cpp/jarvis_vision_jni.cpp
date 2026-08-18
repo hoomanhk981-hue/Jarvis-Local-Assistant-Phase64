@@ -24,6 +24,18 @@ struct VisionRuntime {
 
 VisionRuntime g;
 
+struct TextRuntime {
+    llama_model * model = nullptr;
+    llama_context * ctx = nullptr;
+    llama_sampler * sampler = nullptr;
+    int threads = 2;
+    int context = 4096;
+    bool initialized = false;
+    std::mutex mutex;
+};
+
+TextRuntime gt;
+
 std::string jstr(JNIEnv * env, jstring value) {
     if (!value) return {};
     const char * chars = env->GetStringUTFChars(value, nullptr);
@@ -62,10 +74,10 @@ bool loadLocked(const std::string & modelPath, const std::string & mmprojPath, i
     llama_backend_init();
 
     auto mp = llama_model_default_params();
-    mp.n_gpu_layers = 0; // predictable CPU-first baseline for Android; GPU backend can be added later.
+    mp.n_gpu_layers = 0; // predictable CPU-first baseline for Android
     g.model = llama_model_load_from_file(modelPath.c_str(), mp);
     if (!g.model) {
-        LOGE("Failed to load model: %s", modelPath.c_str());
+        LOGE("Failed to load vision model: %s", modelPath.c_str());
         return false;
     }
 
@@ -78,7 +90,7 @@ bool loadLocked(const std::string & modelPath, const std::string & mmprojPath, i
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
     g.ctx = llama_init_from_model(g.model, cp);
     if (!g.ctx) {
-        LOGE("Failed to create llama context");
+        LOGE("Failed to create llama context for vision");
         releaseLocked();
         return false;
     }
@@ -117,7 +129,6 @@ std::string piece(const llama_vocab * vocab, llama_token token) {
 std::string formattedPrompt(const llama_model * model, const std::string & userText) {
     const char * tmpl = llama_model_chat_template(model, nullptr);
     if (!tmpl) {
-        // Fallback is intentionally simple; model-specific chat templates are preferred.
         return userText;
     }
     llama_chat_message msg{ "user", userText.c_str() };
@@ -198,8 +209,140 @@ std::string analyzeLocked(const unsigned char * image, size_t imageLen, const st
     llama_batch_free(batch);
     return output.empty() ? "پاسخی از مدل Vision دریافت نشد." : output;
 }
+
+void releaseTextLocked() {
+    if (gt.sampler) {
+        llama_sampler_free(gt.sampler);
+        gt.sampler = nullptr;
+    }
+    if (gt.ctx) {
+        llama_free(gt.ctx);
+        gt.ctx = nullptr;
+    }
+    if (gt.model) {
+        llama_model_free(gt.model);
+        gt.model = nullptr;
+    }
+    gt.initialized = false;
 }
 
+bool loadTextLocked(const std::string & modelPath, int threads, int context) {
+    releaseTextLocked();
+    llama_backend_init();
+
+    auto mp = llama_model_default_params();
+    mp.n_gpu_layers = 0;
+    gt.model = llama_model_load_from_file(modelPath.c_str(), mp);
+    if (!gt.model) {
+        LOGE("Failed to load text model: %s", modelPath.c_str());
+        return false;
+    }
+
+    auto cp = llama_context_default_params();
+    cp.n_ctx = static_cast<uint32_t>(std::max(512, context));
+    cp.n_batch = 512;
+    cp.n_ubatch = 256;
+    cp.n_threads = std::max(1, threads);
+    cp.n_threads_batch = std::max(1, threads);
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+    gt.ctx = llama_init_from_model(gt.model, cp);
+    if (!gt.ctx) {
+        LOGE("Failed to create llama context for text model");
+        releaseTextLocked();
+        return false;
+    }
+
+    auto sp = llama_sampler_chain_default_params();
+    gt.sampler = llama_sampler_chain_init(sp);
+    llama_sampler_chain_add(gt.sampler, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(gt.sampler, llama_sampler_init_top_p(0.9f, 1));
+    llama_sampler_chain_add(gt.sampler, llama_sampler_init_temp(0.3f));
+    llama_sampler_chain_add(gt.sampler, llama_sampler_init_greedy());
+
+    gt.threads = threads;
+    gt.context = context;
+    gt.initialized = true;
+    return true;
+}
+
+std::string completeTextLocked(const std::string & prompt, const std::string & systemPrompt, int maxTokens) {
+    if (!gt.initialized || !gt.model || !gt.ctx || !gt.sampler) {
+        return "خطا: مدل محلی لود نشده است.";
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(gt.model);
+    std::string formatted = prompt;
+    const char * tmpl = llama_model_chat_template(gt.model, nullptr);
+    if (tmpl) {
+        llama_chat_message msgs[2];
+        int n_msgs = 0;
+        if (!systemPrompt.empty()) {
+            msgs[n_msgs++] = llama_chat_message{ "system", systemPrompt.c_str() };
+        }
+        msgs[n_msgs++] = llama_chat_message{ "user", prompt.c_str() };
+        int32_t size = llama_chat_apply_template(tmpl, msgs, n_msgs, true, nullptr, 0);
+        if (size > 0) {
+            formatted.resize(static_cast<size_t>(size));
+            llama_chat_apply_template(tmpl, msgs, n_msgs, true, formatted.data(), size);
+        }
+    }
+
+    std::vector<llama_token> tokens(formatted.size() + 32);
+    int nTokens = llama_tokenize(vocab, formatted.c_str(), static_cast<int32_t>(formatted.size()), tokens.data(), static_cast<int32_t>(tokens.size()), true, true);
+    if (nTokens < 0) {
+        tokens.resize(static_cast<size_t>(-nTokens));
+        nTokens = llama_tokenize(vocab, formatted.c_str(), static_cast<int32_t>(formatted.size()), tokens.data(), static_cast<int32_t>(tokens.size()), true, true);
+    }
+    if (nTokens <= 0) return "خطا در پردازش توکن‌های ورودی.";
+    tokens.resize(static_cast<size_t>(nTokens));
+
+    llama_memory_clear(llama_get_memory(gt.ctx), true);
+    llama_sampler_reset(gt.sampler);
+
+    llama_batch batch = llama_batch_init(std::max(512, nTokens), 0, 1);
+    for (int i = 0; i < nTokens; ++i) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = (i == nTokens - 1) ? 1 : 0;
+    }
+    batch.n_tokens = nTokens;
+
+    if (llama_decode(gt.ctx, batch) != 0) {
+        llama_batch_free(batch);
+        return "خطا در decode پرامپت متنی.";
+    }
+    llama_batch_free(batch);
+
+    llama_pos nPast = nTokens;
+    std::string output;
+    output.reserve(static_cast<size_t>(maxTokens) * 4);
+    batch = llama_batch_init(1, 0, 1);
+
+    for (int i = 0; i < maxTokens; ++i) {
+        const llama_token token = llama_sampler_sample(gt.sampler, gt.ctx, -1);
+        if (llama_vocab_is_eog(vocab, token)) break;
+        output += piece(vocab, token);
+        llama_sampler_accept(gt.sampler, token);
+
+        batch.n_tokens = 1;
+        batch.token[0] = token;
+        batch.pos[0] = nPast++;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = 1;
+        if (llama_decode(gt.ctx, batch) != 0) {
+            output += "\n[Text generation error]";
+            break;
+        }
+    }
+    llama_batch_free(batch);
+    return output.empty() ? "پاسخی از مدل دریافت نشد." : output;
+}
+}
+
+// Vision LLM JNI
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_vision_LocalVisionLlmEngine_nativeLoad(
     JNIEnv * env, jobject, jstring modelPath, jstring mmprojPath, jint threads, jint context) {
@@ -241,4 +384,41 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_vision_LocalVisionLlmEngine_nativeIsLoaded(JNIEnv *, jobject) {
     std::lock_guard<std::mutex> lock(g.mutex);
     return g.initialized ? JNI_TRUE : JNI_FALSE;
+}
+
+// Text LLM JNI
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_data_models_LocalLlmEngine_nativeLoad(
+    JNIEnv * env, jobject, jstring modelPath, jint threads, jint context) {
+    std::lock_guard<std::mutex> lock(gt.mutex);
+    return loadTextLocked(jstr(env, modelPath), threads, context) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_data_models_LocalLlmEngine_nativeComplete(
+    JNIEnv * env, jobject, jstring prompt, jstring systemPrompt, jint maxTokens) {
+    std::lock_guard<std::mutex> lock(gt.mutex);
+    if (!gt.initialized) {
+        throwIllegal(env, "Local LLM Runtime هنوز Load نشده است.");
+        return nullptr;
+    }
+    try {
+        const std::string result = completeTextLocked(jstr(env, prompt), jstr(env, systemPrompt), std::max(8, static_cast<int>(maxTokens)));
+        return env->NewStringUTF(result.c_str());
+    } catch (const std::exception & ex) {
+        throwIllegal(env, ex.what());
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_data_models_LocalLlmEngine_nativeRelease(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(gt.mutex);
+    releaseTextLocked();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_data_models_LocalLlmEngine_nativeIsLoaded(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(gt.mutex);
+    return gt.initialized ? JNI_TRUE : JNI_FALSE;
 }

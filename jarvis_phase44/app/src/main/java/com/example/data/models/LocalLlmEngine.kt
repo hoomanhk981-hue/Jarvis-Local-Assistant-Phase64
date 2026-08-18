@@ -1,19 +1,24 @@
 package com.example.data.models
 
-import dev.ffmpegkit.llama.Llama
-import dev.ffmpegkit.llama.LlamaConfig
-import dev.ffmpegkit.llama.LlamaModel
 import java.io.File
 import kotlin.math.min
 
 /**
- * Real on-device GGUF inference.
+ * Real on-device GGUF inference via llama.cpp JNI.
  *
- * Speed modes are runtime profiles rather than UI-only labels.  Changing the
- * profile may reload the currently loaded GGUF with a different context size
- * and CPU thread count.  Token budget is applied per generation as well.
+ * Speed modes are runtime profiles rather than UI-only labels. Changing the
+ * profile reloads the currently loaded GGUF with a different context size
+ * and CPU thread count. Token budget is applied per generation as well.
  */
 class LocalLlmEngine {
+    companion object {
+        init {
+            try {
+                System.loadLibrary("jarvis_vision")
+            } catch (_: UnsatisfiedLinkError) {}
+        }
+    }
+
     enum class SpeedProfile(
         val contextSize: Int,
         val maxTokens: Int,
@@ -24,30 +29,37 @@ class LocalLlmEngine {
         HIGH(contextSize = 8192, maxTokens = 768, requestedThreads = 6)
     }
 
-    private var modelHandle: LlamaModel? = null
+    private external fun nativeLoad(modelPath: String, threads: Int, context: Int): Boolean
+    private external fun nativeComplete(prompt: String, systemPrompt: String, maxTokens: Int): String
+    private external fun nativeRelease()
+    private external fun nativeIsLoaded(): Boolean
+
     private var loadedPath: String? = null
     private var loadedProfile: SpeedProfile? = null
 
     suspend fun load(file: File, speedMode: String = "MEDIUM") {
         val profile = profileFor(speedMode)
         unload()
-        modelHandle = Llama.loadModel(
-            modelPath = file.absolutePath,
-            config = LlamaConfig(
-                contextSize = profile.contextSize,
-                threads = cpuThreads(profile)
+        val ok = try {
+            nativeLoad(
+                modelPath = file.absolutePath,
+                threads = cpuThreads(profile),
+                context = profile.contextSize
             )
-        )
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        }
+        if (!ok) {
+            error("خطا در بارگذاری مدل محلی: ${file.name}")
+        }
         loadedPath = file.absolutePath
         loadedProfile = profile
     }
 
     suspend fun complete(prompt: String, speedMode: String): String {
-        var handle = modelHandle ?: error("مدل محلی Load نشده است")
+        if (!isLoaded()) error("مدل محلی Load نشده است")
         val requestedProfile = profileFor(speedMode)
 
-        // Context/thread settings are load-time settings in this llama Android
-        // binding. Reload only when the selected profile actually changes.
         if (loadedProfile != requestedProfile) {
             val path = loadedPath ?: error("مسیر مدل محلی مشخص نیست")
             val file = File(path)
@@ -55,28 +67,32 @@ class LocalLlmEngine {
                 error("فایل مدل برای تغییر حالت سرعت پیدا نشد")
             }
             load(file, requestedProfile.name)
-            handle = modelHandle ?: error("مدل محلی پس از reload آماده نشد")
         }
 
-        val result = Llama.complete(
-            handle,
-            prompt = prompt,
-            systemPrompt = systemPromptFor(requestedProfile),
-            maxTokens = requestedProfile.maxTokens
-        )
-        return result.text.trim()
+        return try {
+            nativeComplete(
+                prompt = prompt,
+                systemPrompt = systemPromptFor(requestedProfile),
+                maxTokens = requestedProfile.maxTokens
+            ).trim()
+        } catch (e: UnsatisfiedLinkError) {
+            "موتور بومی در این محیط قابل اجرا نیست."
+        }
     }
 
     fun activeProfile(): SpeedProfile? = loadedProfile
 
-    fun isLoaded(): Boolean = modelHandle != null
+    fun isLoaded(): Boolean = try {
+        nativeIsLoaded()
+    } catch (_: UnsatisfiedLinkError) {
+        false
+    }
 
     private fun profileFor(speedMode: String): SpeedProfile = runCatching {
         SpeedProfile.valueOf(speedMode.uppercase())
     }.getOrDefault(SpeedProfile.MEDIUM)
 
     private fun cpuThreads(profile: SpeedProfile): Int {
-        // Avoid asking a small phone for more threads than it physically has.
         val available = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
         return min(profile.requestedThreads, available)
     }
@@ -94,9 +110,9 @@ class LocalLlmEngine {
     }
 
     suspend fun unload() {
-        val handle = modelHandle ?: return
-        Llama.releaseModel(handle)
-        modelHandle = null
+        try {
+            nativeRelease()
+        } catch (_: UnsatisfiedLinkError) {}
         loadedPath = null
         loadedProfile = null
     }

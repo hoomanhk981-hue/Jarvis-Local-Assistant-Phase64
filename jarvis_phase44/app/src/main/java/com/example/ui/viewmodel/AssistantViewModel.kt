@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -644,20 +645,24 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 transferStatus = BankTransferStatus.TransferExecuting("در حال ارجاع به درگاه امن بانک صادرات...")
             )
 
-            val intent = saderatAdapter.createLaunchIntent().apply {
+            val intent = saderatAdapter.createLaunchIntent()?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            try {
-                getApplication<Application>().startActivity(intent)
-                val msg = "اپلیکیشن بانک صادرات باز شد. شماره کارت مقصد (${saderatAdapter.formatCardNumber(details.destCardNumber)}) و مبلغ در کلیپ‌بورد/درگاه آماده است."
-                addAssistantMessage(msg)
-                speakText(msg)
-                viewModelScope.launch {
-                    repository.logAction("کارت به کارت بانک صادرات", "BANK_TRANSFER_SADERAT", msg, true)
+            if (intent != null) {
+                try {
+                    getApplication<Application>().startActivity(intent)
+                    val msg = "اپلیکیشن بانک صادرات باز شد. شماره کارت مقصد (${saderatAdapter.formatCardNumber(details.destCardNumber)}) و مبلغ در کلیپ‌بورد/درگاه آماده است."
+                    addAssistantMessage(msg)
+                    speakText(msg)
+                    viewModelScope.launch {
+                        repository.logAction("کارت به کارت بانک صادرات", "BANK_TRANSFER_SADERAT", msg, true)
+                    }
+                } catch (e: Exception) {
+                    val err = "خطا در باز کردن اپلیکیشن بانک صادرات: ${e.message}"
+                    addAssistantMessage(err)
                 }
-            } catch (e: Exception) {
-                val err = "خطا در باز کردن اپلیکیشن بانک صادرات: ${e.message}"
-                addAssistantMessage(err)
+            } else {
+                addAssistantMessage("اپلیکیشن بانک صادرات روی دستگاه یافت نشد.")
             }
         }
     }
@@ -687,8 +692,10 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
             isDangerousCommandPending = false,
             pendingDangerousCommand = ""
         )
-        val res = termuxExecutor.executeTermuxCommand(cmd)
-        _uiState.value = _uiState.value.copy(codeExecutionOutput = res)
+        viewModelScope.launch {
+            val res = termuxExecutor.executeTermuxCommand(cmd)
+            _uiState.value = _uiState.value.copy(codeExecutionOutput = res.stdout.ifBlank { res.stderr })
+        }
     }
 
     fun cancelDangerousCommand() {

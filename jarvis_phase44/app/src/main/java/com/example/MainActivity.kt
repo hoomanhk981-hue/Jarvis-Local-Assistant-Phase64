@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,8 +131,9 @@ class MainActivity : ComponentActivity() {
 
     private fun launchCameraCapture() {
         val file = File.createTempFile("jarvis_vision_", ".jpg", cacheDir)
-        pendingCameraUri = androidx.core.content.FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", file)
-        takeVisionPhoto.launch(pendingCameraUri)
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", file)
+        pendingCameraUri = uri
+        takeVisionPhoto.launch(uri)
     }
 
     private fun analyzeVision(question: String) {
@@ -445,4 +447,9 @@ class MainActivity : ComponentActivity() {
             viewModel.openLiveVoiceAssistant()
         }
     }
+}
+
+@Composable
+fun Greeting(name: String, modifier: Modifier = Modifier) {
+    Text(text = "Hello $name!", modifier = modifier)
 }

@@ -1,7 +1,7 @@
 package com.example.assistant
 
 import android.content.Context
-import com.example.data.models.DownloadedModelEntity
+import com.example.data.local.entities.DownloadedModelEntity
 import org.json.JSONObject
 
 /**
@@ -38,7 +38,7 @@ class LocalAgentEngine(private val context: Context) {
                 is ToolResult.Success -> transcript += "\nTool ${call.name} succeeded: ${result.message} ${result.data}"
             }
 
-            if (result is ToolResult.Failure) continue
+            if (result is ToolResult.Failure) return@repeat
             val finalPrompt = """
 You are Jarvis, a truthful private Android assistant.
 Respond to the user in the same language as the user.
@@ -47,6 +47,7 @@ ${when(result) {
     is ToolResult.Success -> result.message + " " + result.data
     is ToolResult.Failure -> result.message
     is ToolResult.NeedsConfirmation -> result.summary
+    is ToolResult.NeedsPermission -> "Permissions needed: " + result.permissions.joinToString()
 }}
 User request: $input
 Give a concise final response. Never claim an action succeeded unless the tool result says it succeeded.

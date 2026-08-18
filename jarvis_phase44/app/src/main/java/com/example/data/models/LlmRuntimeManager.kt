@@ -25,7 +25,7 @@ class LlmRuntimeManager(private val context: Context) {
         val availableRamMb: Long,
         val cpuCores: Int,
         val recommended: LocalLlmEngine.SpeedProfile,
-        val lowRamDevice: Boolean
+        val lowRam: Boolean
     )
 
     private val mutex = Mutex()

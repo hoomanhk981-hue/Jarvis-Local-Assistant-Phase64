@@ -19,13 +19,14 @@ class ConfirmationManager(
         val summary: String,
         val risk: Risk,
         val createdAt: Long = System.currentTimeMillis(),
-        val expiresAt: Long = createdAt + ttlMillis
+        val expiresAt: Long = createdAt + 2 * 60 * 1000L
     )
 
     private val pending = ConcurrentHashMap<String, Request>()
 
     fun create(toolName: String, arguments: Map<String, String>, summary: String, risk: Risk): Request {
-        val request = Request(UUID.randomUUID().toString(), toolName, arguments.toMap(), summary, risk)
+        val now = System.currentTimeMillis()
+        val request = Request(UUID.randomUUID().toString(), toolName, arguments.toMap(), summary, risk, now, now + ttlMillis)
         pending[request.id] = request
         return request
     }

@@ -1,5 +1,6 @@
 package com.example.data.models
 
+import com.example.data.local.entities.ModelType
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File

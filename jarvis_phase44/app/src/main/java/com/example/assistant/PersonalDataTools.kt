@@ -128,7 +128,7 @@ class SmsSearchTool(private val context: Context) : JarvisTool {
 
     private fun fuzzyTokenMatch(query: String, body: String): Boolean {
         if (query.length < 3) return false
-        return body.split(Regex("\\s+"), RegexOption.IGNORE_CASE).any { token ->
+        return body.split(Regex("\\s+")).any { token ->
             levenshtein(query, token) <= maxOf(1, query.length / 4)
         }
     }
