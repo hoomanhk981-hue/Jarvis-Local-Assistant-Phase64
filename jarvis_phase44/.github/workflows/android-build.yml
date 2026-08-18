@@ -32,11 +32,16 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      # This repo ships without a gradlew wrapper, so we generate one
+      # before anything (including preflight.py) relies on it existing.
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 9.3.1 --no-daemon
+
       - name: Preflight
         run: python3 scripts/preflight.py
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
