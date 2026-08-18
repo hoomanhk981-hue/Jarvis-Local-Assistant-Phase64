@@ -139,13 +139,19 @@ jobs:
           files=("$GITHUB_WORKSPACE"/apk-output/*.apk)
           args=()
           for f in "${files[@]}"; do args+=("$f"); done
+          cat > /tmp/release-notes.md <<'EOF'
+          آخرین نسخه APK برای نصب مستقیم روی گوشی اندروید.
+
+          - تاریخ ساخت: DATE_PLACEHOLDER
+          - کامیت: SHA_PLACEHOLDER
+          - فایل‌ها: FILES_PLACEHOLDER
+
+          برای نصب: فایل APK را روی گوشی دانلود کنید، «نصب از منابع ناشناس» را فعال کنید و فایل را نصب کنید.
+          EOF
+          # Remove the 10-space YAML indentation from the heredoc body.
+          sed -i 's/^          //' /tmp/release-notes.md
+          sed -i "s|DATE_PLACEHOLDER|$(date -u +%Y-%m-%dT%H:%MZ)|; s|SHA_PLACEHOLDER|${GITHUB_SHA:0:7}|; s|FILES_PLACEHOLDER|$(cd "$GITHUB_WORKSPACE/apk-output" && ls | tr '\n' ' ')|" /tmp/release-notes.md
           gh release create "$TAG" "${args[@]}" \
             --title "Jarvis Local Assistant APK (Android)" \
-            --notes "آخرین نسخه APK برای نصب مستقیم روی گوشی اندروید.
-
-- تاریخ ساخت: $(date -u +%Y-%m-%dT%H:%MZ)
-- کامیت: ${GITHUB_SHA:0:7}
-- فایل‌ها: $(cd "$GITHUB_WORKSPACE/apk-output" && ls | tr '\n' ' ')
-
-برای نصب: فایل APK را روی گوشی دانلود کنید، «نصب از منابع ناشناس» را فعال کنید و فایل را نصب کنید."
+            --notes-file /tmp/release-notes.md
           echo "Release $TAG updated."
