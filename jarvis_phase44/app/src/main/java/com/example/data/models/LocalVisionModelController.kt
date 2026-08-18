@@ -36,7 +36,7 @@ class LocalVisionModelController(
         }
 
         return@withLock try {
-            runtime.load(File(model.localFilePath), speedMode)
+            runtime.load(model, speedMode)
             modelDao.unloadAllModelsOfType(ModelType.VISION)
             modelDao.setModelLoaded(model.id, true)
             Result.success("مدل Vision ${model.name} فعال شد و آماده پردازش محلی تصویر است.")

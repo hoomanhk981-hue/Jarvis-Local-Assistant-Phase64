@@ -18,10 +18,13 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 
+# llama.cpp is pinned to a specific commit (not "master") so builds stay
+# reproducible and cannot break when upstream changes its API. This revision
+# is the one the JNI bridge (jarvis_vision_jni.cpp) was validated against.
 FetchContent_Declare(
     llama_cpp
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG master
+    GIT_TAG 9731ad3f29da96f588711a0d1eb08cf210721e16
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(llama_cpp)

@@ -68,8 +68,8 @@ class AssistantRepository(private val context: Context) {
                     id = "smollm2_360m",
                     name = "SmolLM2 360M UltraFast",
                     description = "مدل فوق‌العاده کم‌حجم هاگینگ‌فیس با پاسخگویی آنی و مصرف رم بهینه",
-                    sizeBytes = 230000000L,
-                    sizeFormatted = "230 MB",
+                    sizeBytes = 270590880L,
+                    sizeFormatted = "258 MB",
                     ramRequiredMb = 512,
                     requiredAbi = "arm64-v8a / armeabi-v7a",
                     license = "Apache 2.0",
@@ -77,7 +77,7 @@ class AssistantRepository(private val context: Context) {
                     speedRating = SpeedRating.LOW,
                     isDownloaded = false,
                     downloadProgressPercentage = 0,
-                    downloadUrl = "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q4_k_m.gguf"
+                    downloadUrl = "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf"
                 ),
                 DownloadedModelEntity(
                     id = "llama3.2_1b",

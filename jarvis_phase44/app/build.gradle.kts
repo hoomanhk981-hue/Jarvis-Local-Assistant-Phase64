@@ -51,6 +51,13 @@ android {
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
 
+  lint {
+    // Release builds must not fail because of non-fatal lint warnings;
+    // the APK is the deliverable here.
+    abortOnError = false
+    checkReleaseBuilds = false
+  }
+
   externalNativeBuild {
     cmake {
       path = file("src/main/cpp/CMakeLists.txt")

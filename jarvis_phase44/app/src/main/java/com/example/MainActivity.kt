@@ -90,7 +90,9 @@ class MainActivity : ComponentActivity() {
     private val visionResultState = mutableStateOf<String?>(null)
     private val visionBusyState = mutableStateOf(false)
     private var pendingCameraUri: Uri? = null
-    private var voicePackStatus by mutableStateOf(VoicePackManager(this).status())
+    // Computed lazily (on first Settings screen render) so the TextToSpeech
+    // engine is not constructed on the main thread during Activity startup.
+    private var voicePackStatus by mutableStateOf<VoicePackManager.VoiceStatus?>(null)
 
     private val runtimePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -147,10 +149,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         viewModel.onRuntimeTrimMemory(level)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            visionAnalyzer.close()
+        } catch (_: Exception) {
+        }
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -379,18 +388,23 @@ class MainActivity : ComponentActivity() {
                                         viewModel.addNewPassword(app, acc, pass, notes)
                                     }
                                 )
-                                AppTab.SETTINGS -> SettingsScreen(
-                                    state = state,
-                                    actionHistory = actionHistory,
-                                    onToggleLanguage = { viewModel.toggleLanguage() },
-                                    onOpenDefaultAssistantSettings = { viewModel.openDefaultAssistantSettings() },
-                                    onInstallPersianTts = { voicePackManager.openTtsInstall("fa"); voicePackStatus = voicePackManager.status() },
-                                    onInstallEnglishTts = { voicePackManager.openTtsInstall("en"); voicePackStatus = voicePackManager.status() },
-                                    onInstallSpeechRecognition = { voicePackManager.openSpeechRecognitionSettings(); voicePackStatus = voicePackManager.status() },
-                                    offlinePersianTts = voicePackStatus.offlinePersianTts,
-                                    offlineEnglishTts = voicePackStatus.offlineEnglishTts,
-                                    offlineSpeechAvailable = voicePackStatus.offlineSpeechLikelyAvailable
-                                )
+                                AppTab.SETTINGS -> {
+                                    if (voicePackStatus == null) {
+                                        voicePackStatus = voicePackManager.status()
+                                    }
+                                    SettingsScreen(
+                                        state = state,
+                                        actionHistory = actionHistory,
+                                        onToggleLanguage = { viewModel.toggleLanguage() },
+                                        onOpenDefaultAssistantSettings = { viewModel.openDefaultAssistantSettings() },
+                                        onInstallPersianTts = { voicePackManager.openTtsInstall("fa"); voicePackStatus = voicePackManager.status() },
+                                        onInstallEnglishTts = { voicePackManager.openTtsInstall("en"); voicePackStatus = voicePackManager.status() },
+                                        onInstallSpeechRecognition = { voicePackManager.openSpeechRecognitionSettings(); voicePackStatus = voicePackManager.status() },
+                                        offlinePersianTts = voicePackStatus?.offlinePersianTts ?: false,
+                                        offlineEnglishTts = voicePackStatus?.offlineEnglishTts ?: false,
+                                        offlineSpeechAvailable = voicePackStatus?.offlineSpeechLikelyAvailable ?: false
+                                    )
+                                }
                             }
 
                             // Dialogs

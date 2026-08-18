@@ -2,6 +2,15 @@ name: Android Build & APK Generator
 
 on:
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Which APK(s) to build'
+        type: choice
+        default: both
+        options:
+          - both
+          - debug
+          - release
   push:
     branches: [ main, master ]
   pull_request:
@@ -43,14 +52,8 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "cmake;3.31.6" "ndk;29.0.13113456"
 
-      - name: Set up Gradle 9.3.1
+      - name: Set up Gradle (cached)
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-
-      - name: Generate Gradle Wrapper
-        working-directory: ${{ steps.locate.outputs.dir }}
-        run: gradle wrapper --gradle-version 9.3.1 --no-daemon
 
       - name: Preflight & Validation
         working-directory: ${{ steps.locate.outputs.dir }}
@@ -60,33 +63,89 @@ jobs:
           python3 scripts/preflight.py || true
         continue-on-error: true
 
-      - name: Build Debug APK
-        working-directory: ${{ steps.locate.outputs.dir }}
-        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Restore release signing keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "${{ steps.locate.outputs.dir }}/my-upload-key.jks"
+            chmod 600 "${{ steps.locate.outputs.dir }}/my-upload-key.jks"
+            echo "keystore=yes" >> "$GITHUB_OUTPUT"
+            echo "Release keystore restored."
+          else
+            echo "keystore=no" >> "$GITHUB_OUTPUT"
+            echo "No KEYSTORE_BASE64 secret -> will build debug-only (still installable)."
+          fi
 
-      - name: Prepare APK for Artifacts & Release
+      - name: Build APK(s)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BT="${{ inputs.build_type }}"
+          BT="${BT:-both}"
+          # Without a keystore secret we can only produce a debug APK.
+          if [ "${{ steps.keystore.outputs.keystore }}" != "yes" ] && [ "$BT" = "release" ]; then
+            echo "Keystore secret missing; falling back to debug build."
+            BT="debug"
+          fi
+          case "$BT" in
+            debug)   ./gradlew --no-daemon :app:assembleDebug ;;
+            release) ./gradlew --no-daemon :app:assembleRelease ;;
+            both)    ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease ;;
+          esac
+
+      - name: Copy APKs for Artifacts & Release
         working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/apk-output/Jarvis-Local-Assistant.apk"
+          find app/build/outputs/apk -name "*.apk" \
+            ! -name "*unsigned*" ! -name "*-unaligned*" \
+            -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
           ls -la "$GITHUB_WORKSPACE/apk-output/"
 
-      - name: Upload Debug APK Artifact
+      - name: Verify APK(s)
+        run: |
+          set -euo pipefail
+          count=0
+          for f in "$GITHUB_WORKSPACE"/apk-output/*.apk; do
+            [ -s "$f" ] || { echo "::error::APK is empty: $f"; exit 1; }
+            unzip -l "$f" >/dev/null || { echo "::error::Invalid APK archive: $f"; exit 1; }
+            echo "OK: $(basename "$f") ($(stat -c%s "$f") bytes)"
+            count=$((count+1))
+          done
+          [ "$count" -gt 0 ] || { echo "::error::No APK produced"; exit 1; }
+
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Local-Assistant-APK
           path: apk-output/*.apk
           if-no-files-found: error
 
-      - name: Publish Direct APK to GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        with:
-          tag_name: v1.0.0
-          name: "Jarvis Local Assistant v1.0.0 (APK)"
-          body: |
-            ### 🚀 دانلود مستقیم فایل نصبی APK برای اندروید
-            فایل `Jarvis-Local-Assistant.apk` را دانلود و روی گوشی خود نصب کنید.
-          files: apk-output/Jarvis-Local-Assistant.apk
+      - name: Publish APK to GitHub Release (rolling v1.0.0)
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v1.0.0"
+          # Replace the previous release so the download link stays stable and
+          # always points at the newest APK.
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          files=("$GITHUB_WORKSPACE"/apk-output/*.apk)
+          args=()
+          for f in "${files[@]}"; do args+=("$f"); done
+          gh release create "$TAG" "${args[@]}" \
+            --title "Jarvis Local Assistant APK (Android)" \
+            --notes "آخرین نسخه APK برای نصب مستقیم روی گوشی اندروید.
+
+- تاریخ ساخت: $(date -u +%Y-%m-%dT%H:%MZ)
+- کامیت: ${GITHUB_SHA:0:7}
+- فایل‌ها: $(cd "$GITHUB_WORKSPACE/apk-output" && ls | tr '\n' ' ')
+
+برای نصب: فایل APK را روی گوشی دانلود کنید، «نصب از منابع ناشناس» را فعال کنید و فایل را نصب کنید."
+          echo "Release $TAG updated."

@@ -1,5 +1,6 @@
 package com.example.data.models
 
+import com.example.data.local.entities.DownloadedModelEntity
 import java.io.File
 
 /**
@@ -9,7 +10,7 @@ import java.io.File
  * runtime configured by the app. No cloud endpoint is assumed here.
  */
 interface VisionRuntimeManager {
-    fun load(modelFile: File, speedMode: String)
+    fun load(model: DownloadedModelEntity, speedMode: String)
     fun unload()
     fun isLoaded(): Boolean
     fun describe(imageFile: File, prompt: String): String

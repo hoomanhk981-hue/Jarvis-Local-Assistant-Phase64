@@ -27,6 +27,7 @@ class RealModelDownloadManager(
     private val modelDao: ModelDao
 ) {
     private val runtime = LlmRuntimeManager(context)
+    private val visionController = LocalVisionModelController(LlmVisionRuntimeManager(), modelDao)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -34,6 +35,7 @@ class RealModelDownloadManager(
         .build()
 
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val activeCalls = ConcurrentHashMap<String, okhttp3.Call>()
     private val downloadScope = CoroutineScope(Dispatchers.IO)
 
     fun getModelsDirectory(): File {
@@ -46,9 +48,13 @@ class RealModelDownloadManager(
      * Starts or resumes a real HTTP download for a model GGUF file.
      */
     fun startDownload(model: DownloadedModelEntity, onResult: ((Boolean, String) -> Unit)? = null) {
-        if (activeJobs.containsKey(model.id)) return
+        // Only skip when a download for this model is genuinely still running;
+        // a paused/cancelled job must allow an immediate resume.
+        val existing = activeJobs[model.id]
+        if (existing != null && existing.isActive) return
 
         val job = downloadScope.launch {
+            var activeCall: okhttp3.Call? = null
             try {
                 modelDao.updateDownloadStatus(
                     id = model.id,
@@ -70,7 +76,15 @@ class RealModelDownloadManager(
                 }
 
                 val request = requestBuilder.build()
-                val response = client.newCall(request).execute()
+                val call = client.newCall(request)
+                activeCall = call
+                activeCalls[model.id] = call
+                val response = try {
+                    call.execute()
+                } catch (e: java.io.IOException) {
+                    // Cancelled by the user (pause) or a network failure.
+                    throw e
+                }
 
                 if (!response.isSuccessful && response.code != 206) {
                     throw Exception("خطا در دانلود از سرور: کد وضعیت HTTP ${response.code}")
@@ -157,13 +171,14 @@ class RealModelDownloadManager(
                         speedText = if (model.auxiliaryDownloadUrl.isBlank()) "دانلود کامل و تأیید شد" else "مدل و mmproj دانلود و تأیید شدند"
                     )
                     activeJobs.remove(model.id)
+                    activeCalls.remove(model.id)
                     onResult?.invoke(true, "مدل ${model.name} با موفقیت دانلود و صحت‌سنجی شد.")
                 } else {
                     throw Exception("فایل دانلود شده نامعتبر است یا وجود ندارد.")
                 }
 
             } catch (e: CancellationException) {
-                // Paused by user
+                // Paused by user (coroutine cancelled)
                 modelDao.updateDownloadStatus(
                     id = model.id,
                     isDownloaded = false,
@@ -172,16 +187,29 @@ class RealModelDownloadManager(
                     speedText = "متوقف شد (Pause)"
                 )
                 activeJobs.remove(model.id)
+                activeCalls.remove(model.id)
             } catch (e: Exception) {
-                modelDao.updateDownloadStatus(
-                    id = model.id,
-                    isDownloaded = false,
-                    progress = 0,
-                    isDownloading = false,
-                    speedText = "خطا در دانلود: ${e.localizedMessage ?: "عدم دسترسی به اینترنت"}"
-                )
+                if (activeCall?.isCanceled() == true) {
+                    // HTTP call was actively cancelled -> user pressed pause.
+                    modelDao.updateDownloadStatus(
+                        id = model.id,
+                        isDownloaded = false,
+                        progress = model.downloadProgressPercentage,
+                        isDownloading = false,
+                        speedText = "متوقف شد (Pause)"
+                    )
+                } else {
+                    modelDao.updateDownloadStatus(
+                        id = model.id,
+                        isDownloaded = false,
+                        progress = 0,
+                        isDownloading = false,
+                        speedText = "خطا در دانلود: ${e.localizedMessage ?: "عدم دسترسی به اینترنت"}"
+                    )
+                    onResult?.invoke(false, "خطا در دانلود مدل: ${e.message}")
+                }
                 activeJobs.remove(model.id)
-                onResult?.invoke(false, "خطا در دانلود مدل: ${e.message}")
+                activeCalls.remove(model.id)
             }
         }
 
@@ -189,11 +217,14 @@ class RealModelDownloadManager(
     }
 
     /**
-     * Pauses or cancels an ongoing download.
+     * Pauses or cancels an ongoing download. Cancelling the underlying HTTP
+     * call actually stops the transfer instead of only marking it as paused.
+     * The running coroutine removes the bookkeeping entries itself when it
+     * notices the cancellation, so a resume right after pause still works.
      */
     fun pauseDownload(modelId: String) {
+        activeCalls[modelId]?.cancel()
         activeJobs[modelId]?.cancel()
-        activeJobs.remove(modelId)
     }
 
     /**
@@ -205,16 +236,39 @@ class RealModelDownloadManager(
         if (file.exists()) {
             file.delete()
         }
+        // Vision models keep a separate mmproj file; remove it too so the
+        // storage is actually freed when the model is deleted.
+        if (model.localAuxiliaryFilePath.isNotBlank()) {
+            val aux = File(model.localAuxiliaryFilePath)
+            if (aux.exists()) {
+                aux.delete()
+            }
+        }
         modelDao.resetModelDownload(model.id)
         true
     }
 
     /**
      * Loads a downloaded model for real local inference.
+     *
+     * TEXT models load into the llama.cpp text runtime. VISION models load the
+     * GGUF + mmproj into the local vision runtime (llama.cpp/libmtmd).
+     * SPEECH_TO_TEXT has no bundled native runtime yet, so it reports the
+     * truth instead of pretending the model was loaded.
      */
     suspend fun loadModel(model: DownloadedModelEntity, speedMode: String = "MEDIUM"): String = withContext(Dispatchers.IO) {
-        if (model.modelType != ModelType.TEXT) {
-            return@withContext "مدل ${model.name} فعلاً فقط دانلود می‌شود؛ موتور Vision در مرحله بعد اضافه خواهد شد."
+        if (model.modelType == ModelType.SPEECH_TO_TEXT) {
+            return@withContext "مدل ${model.name} فعلاً فقط دانلود می‌شود؛ موتور بومی Speech-to-Text در نسخه‌های بعدی فعال می‌شود."
+        }
+        if (model.modelType == ModelType.VISION) {
+            val file = if (model.localFilePath.isNotEmpty()) File(model.localFilePath) else File(getModelsDirectory(), "${model.id}.gguf")
+            if (!file.exists() || file.length() == 0L) {
+                return@withContext "خطا: فایل مدل Vision در مسیر ${file.absolutePath} یافت نشد. لطفاً ابتدا مدل را دانلود کنید."
+            }
+            return@withContext visionController.activate(model, speedMode).fold(
+                onSuccess = { it },
+                onFailure = { "بارگذاری واقعی مدل Vision شکست خورد: ${it.message ?: "خطای ناشناخته"}" }
+            )
         }
         val file = if (model.localFilePath.isNotEmpty()) File(model.localFilePath) else File(getModelsDirectory(), "${model.id}.gguf")
         if (!file.exists() || file.length() == 0L) {
@@ -240,9 +294,20 @@ class RealModelDownloadManager(
     }
 
     suspend fun unloadModel(model: DownloadedModelEntity): String = withContext(Dispatchers.IO) {
-        runtime.unload()
-        modelDao.setModelLoaded(model.id, false)
-        "مدل ${model.name} از موتور محلی خارج شد."
+        when (model.modelType) {
+            ModelType.VISION -> {
+                val res = visionController.deactivate(model.id)
+                res.fold(
+                    onSuccess = { "مدل ${model.name} از موتور بینایی محلی خارج شد." },
+                    onFailure = { "خطا در خارج کردن مدل بینایی: ${it.message ?: "خطای ناشناخته"}" }
+                )
+            }
+            else -> {
+                runtime.unload()
+                modelDao.setModelLoaded(model.id, false)
+                "مدل ${model.name} از موتور محلی خارج شد."
+            }
+        }
     }
 
     fun runtimeCapability(): LlmRuntimeManager.DeviceCapability = runtime.capability()

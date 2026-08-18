@@ -1,5 +1,15 @@
 # Jarvis Local Assistant — Phase 27
 
+## 📲 دریافت و نصب APK روی گوشی
+
+هر بار که کدی روی شاخه `main` ثبت شود، ورکفلو `Android Build & APK Generator` بهصورت خودکار یک APK جدید میسازد و آن را روی **GitHub Release** (تگ `v1.0.0`) قرار میدهد — لینک همیشه به آخرین نسخه اشاره میکند:
+
+> https://github.com/hoomanhk981-hue/Jarvis-Local-Assistant-Phase64/releases/tag/v1.0.0
+
+فایل `app-release.apk` (یا `app-debug.apk`) را دانلود کنید، روی گوشی اندروید (۷ به بالا، معماری ۶۴ بیت) «نصب از منابع ناشناس» را فعال کنید و فایل را نصب کنید. نسخههای بعدی بهصورت آپدیت عادی روی همان اپ نصب میشوند (امضا پایدار است). جزئیات بیشتر در `BUILD.md`.
+
+---
+
 Phase 8 adds real Android communication tools to the existing local-agent architecture.
 
 ### Tools
