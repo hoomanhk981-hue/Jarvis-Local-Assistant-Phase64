@@ -11,11 +11,11 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.localassistant.ai"
+    applicationId = "com.jarvis.localassistant.phase64"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.1-local-llm"
+    versionCode = 2
+    versionName = "1.2-phase64"
     ndk { abiFilters += listOf("arm64-v8a") }
     ndkVersion = "29.0.13113456"
 
