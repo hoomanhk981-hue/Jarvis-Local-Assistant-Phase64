@@ -5,7 +5,8 @@ import androidx.room.PrimaryKey
 
 enum class ModelType {
     TEXT,
-    VISION
+    VISION,
+    SPEECH_TO_TEXT
 }
 
 enum class SpeedRating {
