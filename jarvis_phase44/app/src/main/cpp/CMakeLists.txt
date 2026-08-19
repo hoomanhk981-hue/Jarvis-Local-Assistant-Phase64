@@ -24,8 +24,7 @@ set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
     llama_cpp
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG 9731ad3f29da96f588711a0d1eb08cf210721e16
-    GIT_SHALLOW TRUE
+    GIT_TAG master
 )
 FetchContent_MakeAvailable(llama_cpp)
 
