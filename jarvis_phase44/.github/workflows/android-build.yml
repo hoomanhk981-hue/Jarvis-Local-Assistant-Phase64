@@ -56,7 +56,9 @@ jobs:
 
       - name: Build Debug APK
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: |
+          chmod +x ./gradlew || true
+          ./gradlew --no-daemon :app:assembleDebug
 
       - name: Copy APKs for Artifacts & Release
         working-directory: ${{ steps.locate.outputs.dir }}
