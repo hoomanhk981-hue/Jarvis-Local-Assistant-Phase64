@@ -2,15 +2,6 @@ name: Android Build & APK Generator
 
 on:
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Which APK(s) to build'
-        type: choice
-        default: both
-        options:
-          - both
-          - debug
-          - release
   push:
     branches: [ main, master ]
   pull_request:
@@ -63,40 +54,9 @@ jobs:
           python3 scripts/preflight.py || true
         continue-on-error: true
 
-      - name: Restore release signing keystore
-        id: keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "${{ steps.locate.outputs.dir }}/my-upload-key.jks"
-            chmod 600 "${{ steps.locate.outputs.dir }}/my-upload-key.jks"
-            echo "keystore=yes" >> "$GITHUB_OUTPUT"
-            echo "Release keystore restored."
-          else
-            echo "keystore=no" >> "$GITHUB_OUTPUT"
-            echo "No KEYSTORE_BASE64 secret -> will build debug-only (still installable)."
-          fi
-
-      - name: Build APK(s)
+      - name: Build Debug APK
         working-directory: ${{ steps.locate.outputs.dir }}
-        env:
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          BT="${{ inputs.build_type }}"
-          BT="${BT:-both}"
-          # Without a keystore secret we can only produce a debug APK.
-          if [ "${{ steps.keystore.outputs.keystore }}" != "yes" ] && [ "$BT" = "release" ]; then
-            echo "Keystore secret missing; falling back to debug build."
-            BT="debug"
-          fi
-          case "$BT" in
-            debug)   ./gradlew --no-daemon :app:assembleDebug ;;
-            release) ./gradlew --no-daemon :app:assembleRelease ;;
-            both)    ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease ;;
-          esac
+        run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Copy APKs for Artifacts & Release
         working-directory: ${{ steps.locate.outputs.dir }}
@@ -133,24 +93,21 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v1.0.0"
-          # Replace the previous release so the download link stays stable and
-          # always points at the newest APK.
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
           files=("$GITHUB_WORKSPACE"/apk-output/*.apk)
           args=()
           for f in "${files[@]}"; do args+=("$f"); done
           cat > /tmp/release-notes.md <<'EOF'
-          آخرین نسخه APK برای نصب مستقیم روی گوشی اندروید.
+          ### 🚀 Jarvis Local Assistant APK (Android)
 
-          - تاریخ ساخت: DATE_PLACEHOLDER
-          - کامیت: SHA_PLACEHOLDER
-          - فایل‌ها: FILES_PLACEHOLDER
+          فایل نصب مستقیم APK برای گوشی‌های اندرویدی.
 
-          برای نصب: فایل APK را روی گوشی دانلود کنید، «نصب از منابع ناشناس» را فعال کنید و فایل را نصب کنید.
+          #### 📱 راهنمای نصب:
+          1. فایل APK را دانلود و نصب کنید.
+          2. در صورت دریافت هشدار Play Protect، روی **More details** و سپس **Install anyway** (نصب در هر حال) بزنید.
+          3. در صورتی که نسخه قبلی روی دستگاه دارید، ابتدا آن را Uninstall کنید.
           EOF
-          # Remove the 10-space YAML indentation from the heredoc body.
           sed -i 's/^          //' /tmp/release-notes.md
-          sed -i "s|DATE_PLACEHOLDER|$(date -u +%Y-%m-%dT%H:%MZ)|; s|SHA_PLACEHOLDER|${GITHUB_SHA:0:7}|; s|FILES_PLACEHOLDER|$(cd "$GITHUB_WORKSPACE/apk-output" && ls | tr '\n' ' ')|" /tmp/release-notes.md
           gh release create "$TAG" "${args[@]}" \
             --title "Jarvis Local Assistant APK (Android)" \
             --notes-file /tmp/release-notes.md
