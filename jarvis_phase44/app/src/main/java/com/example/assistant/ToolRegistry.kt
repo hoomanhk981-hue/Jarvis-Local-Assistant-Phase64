@@ -19,7 +19,7 @@ import com.example.bank.TransferRequest
  * it can only request named tools and receive structured results.
  */
 class ToolRegistry(private val context: Context) {
-    private val permissionCoordinator = PermissionCoordinator(context)
+    val permissionCoordinator = PermissionCoordinator(context)
     private val confirmationManager = ConfirmationManager()
     private val tools = linkedMapOf<String, JarvisTool>()
 

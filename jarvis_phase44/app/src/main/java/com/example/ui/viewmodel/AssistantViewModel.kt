@@ -334,7 +334,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun initializePersonalDatabase() {
         viewModelScope.launch {
-            repository.saveMemory("دیتابیس_شخصی", "فعال_شده", MemoryCategory.PERSONAL_PREFERENCE)
+            repository.saveMemory("دیتابیس_شخصی", "فعال_شده", MemoryCategory.USER_PREFERENCE)
             _uiState.update {
                 it.copy(
                     isPersonalDatabaseEnabled = true,
@@ -912,7 +912,9 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun loadCodeFilesFromDisk() {
         viewModelScope.launch {
-            val files = safFileManager.listSavedCodeFiles()
+            val indexed = safFileManager.indexDirectory()
+            val files = indexed.filter { !it.isDirectory && (it.extension in listOf("py", "cpp", "c", "sh", "json", "java", "kt")) }
+                .mapNotNull { safFileManager.readCodeFile(it.name) }
             if (files.isNotEmpty()) {
                 _uiState.update { it.copy(codeFiles = files) }
             }
