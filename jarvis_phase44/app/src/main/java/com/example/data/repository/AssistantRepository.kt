@@ -6,8 +6,11 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
 import android.provider.Telephony
+import android.net.Uri
 import com.example.data.local.AppDatabase
 import com.example.data.local.entities.ActionHistoryEntity
+import com.example.data.local.entities.ChatMessageEntity
+import com.example.data.local.entities.ChatSessionEntity
 import com.example.data.local.entities.DownloadedModelEntity
 import com.example.data.local.entities.MemoryCategory
 import com.example.data.local.entities.ModelType
@@ -26,11 +29,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 class AssistantRepository(private val context: Context) {
 
     private val db = AppDatabase.getDatabase(context)
     val modelDao = db.modelDao()
+    val chatDao = db.chatDao()
     private val memoryDao = db.userMemoryDao()
     private val passwordDao = db.savedPasswordDao()
     private val actionDao = db.actionHistoryDao()
@@ -42,6 +47,53 @@ class AssistantRepository(private val context: Context) {
     val allMemories: Flow<List<UserMemoryEntity>> = memoryDao.getAllMemories()
     val allPasswords: Flow<List<SavedPasswordEntity>> = passwordDao.getAllPasswords()
     val actionHistory: Flow<List<ActionHistoryEntity>> = actionDao.getRecentHistory()
+    val allChatSessions: Flow<List<ChatSessionEntity>> = chatDao.getAllSessions()
+
+    fun getMessagesForSession(sessionId: String): Flow<List<ChatMessageEntity>> =
+        chatDao.getMessagesForSession(sessionId)
+
+    suspend fun createChatSession(title: String = "گفتگوی جدید"): ChatSessionEntity = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        val session = ChatSessionEntity(id = id, title = title)
+        chatDao.insertOrUpdateSession(session)
+        session
+    }
+
+    suspend fun saveChatMessage(
+        sessionId: String,
+        sender: String,
+        text: String,
+        imageUri: Uri? = null,
+        fileUri: Uri? = null,
+        fileName: String? = null
+    ): ChatMessageEntity = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        val msg = ChatMessageEntity(
+            id = id,
+            sessionId = sessionId,
+            sender = sender,
+            text = text,
+            imageUriString = imageUri?.toString(),
+            fileUriString = fileUri?.toString(),
+            fileName = fileName,
+            timestamp = System.currentTimeMillis()
+        )
+        chatDao.insertMessage(msg)
+        val existingSession = chatDao.getSessionById(sessionId)
+        if (existingSession != null && (existingSession.title == "گفتگوی جدید" || existingSession.title == "New Chat") && sender == "USER" && text.isNotBlank()) {
+            chatDao.updateSessionTitle(sessionId, text.take(35))
+        }
+        msg
+    }
+
+    suspend fun deleteChatSession(sessionId: String) = withContext(Dispatchers.IO) {
+        chatDao.deleteMessagesForSession(sessionId)
+        chatDao.deleteSession(sessionId)
+    }
+
+    suspend fun updateChatTitle(sessionId: String, title: String) = withContext(Dispatchers.IO) {
+        chatDao.updateSessionTitle(sessionId, title)
+    }
 
     /**
      * Seeds initial real open-source GGUF model registry.

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,16 +18,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assistant
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -40,15 +48,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entities.ActionHistoryEntity
-import com.example.ui.components.GlassCard
-import com.example.ui.theme.GlassBorder
-import com.example.ui.theme.GlassBorderVibrant
-import com.example.ui.theme.GlowingCyan
+import com.example.data.local.entities.SpeedRating
+import com.example.ui.theme.LightBorder
+import com.example.ui.theme.LightContainer
+import com.example.ui.theme.LightContainerElevated
+import com.example.ui.theme.NeonPurpleDark
 import com.example.ui.theme.NeonPurpleLight
 import com.example.ui.theme.NeonPurplePrimary
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.WhiteBackground
 import com.example.ui.viewmodel.AssistantUiState
 
 @Composable
@@ -57,206 +67,290 @@ fun SettingsScreen(
     actionHistory: List<ActionHistoryEntity> = emptyList(),
     onToggleLanguage: () -> Unit,
     onOpenDefaultAssistantSettings: () -> Unit = {},
-    onInstallPersianTts: () -> Unit = {},
-    onInstallEnglishTts: () -> Unit = {},
-    onInstallSpeechRecognition: () -> Unit = {},
-    offlinePersianTts: Boolean = false,
-    offlineEnglishTts: Boolean = false,
-    offlineSpeechAvailable: Boolean = false
+    onStartVoiceSetup: () -> Unit = {},
+    onEnableDatabase: () -> Unit = {},
+    onExportDatabase: () -> Unit = {},
+    onSetSpeedMode: (SpeedRating) -> Unit = {}
 ) {
+    val scrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
+            .background(WhiteBackground)
+            .verticalScroll(scrollState)
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Assistant Default Setup Card
-        GlassCard(
-            modifier = Modifier.fillMaxWidth().testTag("setting_assistant_card"),
-            shape = RoundedCornerShape(20.dp),
-            isElevated = true,
-            borderColor = GlassBorderVibrant
+        // Top Header
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(bottom = 4.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(imageVector = Icons.Default.Assistant, contentDescription = "Assistant", modifier = Modifier.size(28.dp), tint = GlowingCyan)
-                    Text(text = "تنظیم Jarvis به عنوان دستیار پیش‌فرض سیستم", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
-                }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(NeonPurplePrimary)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "Settings",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column {
                 Text(
-                    text = "با انتخاب Jarvis به‌عنوان دستیار پیش‌فرض، با فشردن طولانی دکمه پاور، هوم یا کلید صوتی در هر جای اندروید، دستیار بلافاصله باز می‌شود.",
+                    text = "تنظیمات دستیار هوشمند Jarvis",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "پیکربندی قابلیت‌های صوتی، امنیتی و هوش مصنوعی",
                     fontSize = 12.sp,
-                    color = TextSecondary
-                )
-                Button(
-                    onClick = { onOpenDefaultAssistantSettings() },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = NeonPurplePrimary),
-                    modifier = Modifier.fillMaxWidth().testTag("open_assistant_settings_button")
-                ) {
-                    Text("تنظیم در بخش Default Apps اندروید", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Offline Voice Packs
-        GlassCard(
-            modifier = Modifier.fillMaxWidth().testTag("setting_voice_packs_card"),
-            shape = RoundedCornerShape(18.dp),
-            borderColor = GlassBorderVibrant
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(imageVector = Icons.Default.RecordVoiceOver, contentDescription = "Offline Voice", tint = GlowingCyan)
-                    Column {
-                        Text("بسته‌های صوتی آفلاین", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
-                        Text("برای کارکرد Voice بدون API و بدون اینترنت", fontSize = 11.sp, color = TextSecondary)
-                    }
-                }
-
-                Text(
-                    text = if (offlineSpeechAvailable) "تشخیص گفتار on-device روی این دستگاه در دسترس است." else "تشخیص گفتار آفلاین در دسترس تشخیص داده نشد.",
-                    fontSize = 11.sp, color = if (offlineSpeechAvailable) GlowingCyan else TextSecondary
-                )
-                Button(onClick = onInstallSpeechRecognition, modifier = Modifier.fillMaxWidth().testTag("install_offline_speech_button")) {
-                    Icon(Icons.Default.Download, contentDescription = null)
-                    Spacer(Modifier.size(6.dp))
-                    Text("مدیریت / دانلود زبان‌های Speech-to-Text")
-                }
-
-                Text(
-                    text = if (offlinePersianTts) "✓ صدای فارسی آفلاین نصب است" else "صدای فارسی آفلاین نصب نیست",
-                    fontSize = 11.sp, color = if (offlinePersianTts) GlowingCyan else TextSecondary
-                )
-                Button(onClick = onInstallPersianTts, modifier = Modifier.fillMaxWidth().testTag("install_persian_tts_button")) {
-                    Icon(Icons.Default.Download, contentDescription = null)
-                    Spacer(Modifier.size(6.dp))
-                    Text("دانلود / نصب TTS فارسی")
-                }
-
-                Text(
-                    text = if (offlineEnglishTts) "✓ صدای انگلیسی آفلاین نصب است" else "صدای انگلیسی آفلاین نصب نیست",
-                    fontSize = 11.sp, color = if (offlineEnglishTts) GlowingCyan else TextSecondary
-                )
-                Button(onClick = onInstallEnglishTts, modifier = Modifier.fillMaxWidth().testTag("install_english_tts_button")) {
-                    Icon(Icons.Default.Download, contentDescription = null)
-                    Spacer(Modifier.size(6.dp))
-                    Text("دانلود / نصب TTS انگلیسی")
-                }
-            }
-        }
-
-        // Termux Integration Status Card
-        GlassCard(
-            modifier = Modifier.fillMaxWidth().testTag("setting_termux_card"),
-            shape = RoundedCornerShape(18.dp),
-            borderColor = if (state.isTermuxInstalled) GlowingCyan else GlassBorder
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Terminal,
-                        contentDescription = "Termux",
-                        tint = if (state.isTermuxInstalled) GlowingCyan else Color(0xFFFFB74D)
-                    )
-                    Column {
-                        Text(text = "وضعیت محیط ترموکس (Termux)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
-                        Text(
-                            text = if (state.isTermuxInstalled) "✅ نصب شده و آماده اجرای دستورات" else "⚠️ نصب نیست (اجرای کدها به ذخیره فایل محدود می‌شود)",
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                    }
-                }
-            }
-        }
-
-        // Language toggle
-        GlassCard(
-            modifier = Modifier.fillMaxWidth().testTag("setting_language_card"),
-            shape = RoundedCornerShape(18.dp),
-            borderColor = GlassBorderVibrant
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(imageVector = Icons.Default.Language, contentDescription = "Language", tint = NeonPurpleLight)
-                    Column {
-                        Text(text = "زبان رابط و پردازش گفتار (Language)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
-                        Text(
-                            text = if (state.isPersianLanguage) "فارسی (Persian - fa-IR)" else "English (en-US)",
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                    }
-                }
-                Switch(
-                    checked = state.isPersianLanguage,
-                    onCheckedChange = { onToggleLanguage() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = NeonPurplePrimary,
-                        uncheckedThumbColor = TextSecondary,
-                        uncheckedTrackColor = Color(0x30FFFFFF)
-                    ),
-                    modifier = Modifier.testTag("toggle_language_switch")
-                )
-            }
-        }
-
-        // Action History Audit Log
-        GlassCard(
-            modifier = Modifier.fillMaxWidth().testTag("setting_audit_log_card"),
-            shape = RoundedCornerShape(18.dp),
-            borderColor = GlassBorder
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(imageVector = Icons.Default.History, contentDescription = "Audit Log", tint = NeonPurpleLight)
-                    Text(text = "تاریخچه دستورات اجرا شده (Action Audit Log)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
-                }
-                Text(
-                    text = "اطلاعات حساس (رمزهای عبور، OTP و کارت‌ها) جهت امنیت قبل از ثبت به صورت خودکار ماسک می‌شوند.",
-                    fontSize = 11.sp,
                     color = TextMuted
                 )
+            }
+        }
 
-                if (actionHistory.isEmpty()) {
-                    Text("هنوز دستوری ثبت نشده است.", fontSize = 12.sp, color = TextMuted)
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        actionHistory.take(5).forEach { action ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(if (action.isSuccess) GlowingCyan else Color(0xFFFF5252))
-                                    )
-                                    Text(action.commandText, fontSize = 12.sp, color = TextPrimary, maxLines = 1)
-                                }
-                                Text(action.skillExecuted, fontSize = 10.sp, color = TextMuted)
-                            }
+        // Section 1: 1-Click Voice & AI Setup
+        SettingsCard(
+            title = "🚀 راه‌اندازی ۱-کلیک صوت و هوش مصنوعی (Voice Setup)",
+            description = "تست، دانلود و پیکربندی خودکار موتور تبدیل متن به گفتار (TTS فارسی و انگلیسی) و تشخیص گفتار"
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onStartVoiceSetup,
+                    enabled = !state.isVoiceSetupInProgress,
+                    colors = ButtonDefaults.buttonColors(containerColor = NeonPurplePrimary),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("settings_start_voice_setup_button")
+                ) {
+                    Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = if (state.voiceSetupProgress == 100) "✅ سیستم صوتی آماده است (تست مجدد)" else "⚡ راه‌اندازی و فعال‌سازی خودکار صوت",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                if (state.isVoiceSetupInProgress || state.voiceSetupProgress > 0) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LinearProgressIndicator(
+                            progress = { state.voiceSetupProgress / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = NeonPurplePrimary,
+                            trackColor = Color(0xFFE5E7EB)
+                        )
+                        Text(
+                            text = state.voiceSetupStatusText,
+                            fontSize = 11.5.sp,
+                            color = if (state.voiceSetupProgress == 100) Color(0xFF16A34A) else NeonPurplePrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 2: Default Android AI Assistant (Power Button trigger)
+        SettingsCard(
+            title = "🤖 دستیار پیش‌فرض گوشی و دکمه پاور (Power Button)",
+            description = "با انتخاب Jarvis به عنوان دستیار پیش‌فرض، با نگه داشتن دکمه پاور یا هوم گوشی، دستیار بلافاصله فعال می‌شود."
+        ) {
+            Button(
+                onClick = onOpenDefaultAssistantSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("settings_open_assistant_settings_button")
+            ) {
+                Icon(imageVector = Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.size(8.dp))
+                Text("تنظیم به عنوان دستیار پیش‌فرض اندروید", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // Section 3: Personal Database & Memory Vault
+        SettingsCard(
+            title = "💾 پایگاه داده امن و حافظه شخصی (Database & Vault)",
+            description = "ذخیره محلی و رمزنگاری‌شده رمزها و اطلاعات شخصی با استاندارد نظامی AES"
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "وضعیت دیتابیس محلی:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = if (state.isPersonalDatabaseEnabled) "✅ فعال و امن" else "⚠️ غیرفعال",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (state.isPersonalDatabaseEnabled) Color(0xFF16A34A) else Color(0xFFDC2626)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onEnableDatabase,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("فعال‌سازی دیتابیس", fontSize = 11.sp, color = NeonPurplePrimary, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onExportDatabase,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("خروجی JSON", fontSize = 11.sp, color = NeonPurplePrimary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Section 4: Termux Environment
+        SettingsCard(
+            title = "⚡ محیط ترموکس و اجرای کد (Termux Integration)",
+            description = "اجرای دستورات پایتون، C++ و لینوکس از طریق سرویس RunCommand"
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = null,
+                        tint = if (state.isTermuxInstalled) Color(0xFF16A34A) else Color(0xFFEAB308),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = if (state.isTermuxInstalled) "ترموکس روی دستگاه نصب است" else "ترموکس یافت نشد",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+
+        // Section 5: Speed Mode & Language
+        SettingsCard(
+            title = "⚙️ حالت سرعت پردازش و زبان",
+            description = "تنظیم میزان دقت و سرعت استنتاج مدل‌های محلی و تغییر زبان پیش‌فرض"
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "زبان پاسخگویی دستیار (فارسی / English):", fontSize = 12.sp, color = TextPrimary)
+                    Switch(
+                        checked = state.isPersianLanguage,
+                        onCheckedChange = { onToggleLanguage() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = NeonPurplePrimary
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    SpeedRating.entries.forEach { mode ->
+                        val isSelected = state.speedMode == mode
+                        Button(
+                            onClick = { onSetSpeedMode(mode) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) NeonPurplePrimary else LightContainer
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = when (mode) {
+                                    SpeedRating.LOW -> "سریع"
+                                    SpeedRating.MEDIUM -> "متعادل"
+                                    SpeedRating.HIGH -> "دقیق"
+                                },
+                                color = if (isSelected) Color.White else TextPrimary,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
                         }
                     }
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun SettingsCard(
+    title: String,
+    description: String,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFC)),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, LightBorder)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.5.sp,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    fontSize = 11.5.sp,
+                    color = TextMuted,
+                    lineHeight = 17.sp
+                )
+            }
+
+            content()
         }
     }
 }

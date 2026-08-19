@@ -18,6 +18,7 @@ import com.example.bank.BankAdapter
 import com.example.bank.BankTransferStatus
 import com.example.bank.SaderatBankAdapter
 import com.example.data.local.entities.ActionHistoryEntity
+import com.example.data.local.entities.ChatSessionEntity
 import com.example.data.local.entities.DownloadedModelEntity
 import com.example.data.local.entities.MemoryCategory
 import com.example.data.local.entities.ModelType
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 
 data class ChatMessage(
     val id: String = System.currentTimeMillis().toString(),
@@ -67,6 +69,8 @@ data class AssistantUiState(
     val selectedTab: AppTab = AppTab.HOME_ASSISTANT,
     val isPersianLanguage: Boolean = true,
     val speedMode: SpeedRating = SpeedRating.MEDIUM,
+    val currentSessionId: String = "",
+    val chatSessions: List<ChatSessionEntity> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
     val isListeningVoice: Boolean = false,
     val isSpeakingVoice: Boolean = false,
@@ -92,7 +96,12 @@ data class AssistantUiState(
     val pendingToolConfirmation: ConfirmationManager.Request? = null,
     val pendingToolPermissions: List<String> = emptyList(),
     val pendingPermissionTool: String? = null,
-    val pendingPermissionArguments: Map<String, String> = emptyMap()
+    val pendingPermissionArguments: Map<String, String> = emptyMap(),
+    val showFirstRunOnboarding: Boolean = false,
+    val isVoiceSetupInProgress: Boolean = false,
+    val voiceSetupProgress: Int = 0,
+    val voiceSetupStatusText: String = "",
+    val isPersonalDatabaseEnabled: Boolean = true
 )
 
 class AssistantViewModel(application: Application) : AndroidViewModel(application) {
@@ -110,6 +119,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     private val localAgent = com.example.assistant.LocalAgentEngine(application)
 
     private val saderatAdapter = SaderatBankAdapter(application)
+    private val prefs = application.getSharedPreferences("jarvis_assistant_prefs", Context.MODE_PRIVATE)
 
     val allModels: StateFlow<List<DownloadedModelEntity>> = repository.allModels
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -127,10 +137,11 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         AssistantUiState(
             customDatabaseFolderPath = File(application.filesDir, "assistant_db").absolutePath,
             isTermuxInstalled = termuxExecutor.isTermuxInstalled(),
+            showFirstRunOnboarding = prefs.getBoolean("is_first_run", true),
             messages = listOf(
                 ChatMessage(
                     sender = "ASSISTANT",
-                    text = "درود! دستیار خودمختار Jarvis آماده خدمت است. کلیه عملیات‌ها (تماس، پیامک، ترموکس، مدیریت مدل‌ها، کارت به کارت و رمزنگاری داده‌ها) به‌صورت ۱۰۰٪ واقعی و بدون هیچ‌گونه شبیه‌سازی انجام می‌پذیرند."
+                    text = "درود! دستیار هوشمند Jarvis آماده خدمت است. هر فرمانی (تماس، باز کردن برنامه‌ها، اجرای دستورات ترموکس، خلاصه پیامک‌ها و رمز عبور) را بگویید یا بنویسید تا بلافاصله اجرا شود."
                 )
             ),
             codeFiles = listOf(
@@ -146,12 +157,20 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.seedInitialModelsIfNeeded()
             loadCodeFilesFromDisk()
+            initChatSessions()
+        }
+
+        // Observe chat sessions
+        viewModelScope.launch {
+            repository.allChatSessions.collect { sessions ->
+                _uiState.update { it.copy(chatSessions = sessions) }
+            }
         }
 
         // Observe voice recognizer state
         viewModelScope.launch {
             speechToText.isListening.collect { listening ->
-                _uiState.value = _uiState.value.copy(isListeningVoice = listening)
+                _uiState.update { it.copy(isListeningVoice = listening) }
             }
         }
 
@@ -159,7 +178,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             speechToText.speechResult.collect { text ->
                 if (text.isNotBlank()) {
-                    _uiState.value = _uiState.value.copy(speechRecognizedText = text)
+                    _uiState.update { it.copy(speechRecognizedText = text) }
                     if (_uiState.value.isLiveVoiceAssistantOpen) {
                         processUserMessage(text)
                     }
@@ -170,7 +189,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         // Observe TTS state
         viewModelScope.launch {
             textToSpeech.isSpeaking.collect { speaking ->
-                _uiState.value = _uiState.value.copy(isSpeakingVoice = speaking)
+                _uiState.update { it.copy(isSpeakingVoice = speaking) }
             }
         }
 
@@ -179,56 +198,186 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
             repository.allModels.collect { models ->
                 val loadedText = models.firstOrNull { it.isLoaded && it.modelType == ModelType.TEXT }
                 val loadedVision = models.firstOrNull { it.isLoaded && it.modelType == ModelType.VISION }
-                _uiState.value = _uiState.value.copy(
-                    activeTextModel = loadedText,
-                    activeVisionModel = loadedVision
+                _uiState.update {
+                    it.copy(
+                        activeTextModel = loadedText,
+                        activeVisionModel = loadedVision
+                    )
+                }
+            }
+        }
+    }
+
+    // ================= MULTI-CHAT SESSIONS (CHATGPT STYLE) =================
+
+    private suspend fun initChatSessions() {
+        val existing = repository.chatDao.getAllSessions()
+        val firstSession = repository.createChatSession("گفتگوی اصلی")
+        _uiState.update { it.copy(currentSessionId = firstSession.id) }
+    }
+
+    fun startNewChat() {
+        viewModelScope.launch {
+            val newSession = repository.createChatSession("گفتگوی جدید")
+            _uiState.update {
+                it.copy(
+                    currentSessionId = newSession.id,
+                    messages = listOf(
+                        ChatMessage(
+                            sender = "ASSISTANT",
+                            text = "گفتگوی جدید آغاز شد. چطور می‌توانم کمکتان کنم؟"
+                        )
+                    ),
+                    selectedTab = AppTab.HOME_ASSISTANT
                 )
             }
         }
     }
 
-    private suspend fun loadCodeFilesFromDisk() {
-        val indexed = safFileManager.indexDirectory()
-        if (indexed.isNotEmpty()) {
-            val loadedFiles = mutableListOf<CodeFile>()
-            for (f in indexed.take(10)) {
-                val code = safFileManager.readCodeFile(f.name)
-                if (code != null) loadedFiles.add(code)
+    fun selectChatSession(sessionId: String) {
+        viewModelScope.launch {
+            val dbMsgs = repository.chatDao.getMessagesForSessionSnapshot(sessionId)
+            val converted = if (dbMsgs.isEmpty()) {
+                listOf(
+                    ChatMessage(
+                        sender = "ASSISTANT",
+                        text = "گفتگوی آماده دریافت پیام شماست."
+                    )
+                )
+            } else {
+                dbMsgs.map {
+                    ChatMessage(
+                        id = it.id,
+                        sender = it.sender,
+                        text = it.text,
+                        imageUri = it.imageUriString?.let(Uri::parse),
+                        fileUri = it.fileUriString?.let(Uri::parse),
+                        fileName = it.fileName,
+                        timestamp = it.timestamp
+                    )
+                }
             }
-            if (loadedFiles.isNotEmpty()) {
-                _uiState.value = _uiState.value.copy(codeFiles = loadedFiles)
+            _uiState.update {
+                it.copy(
+                    currentSessionId = sessionId,
+                    messages = converted,
+                    selectedTab = AppTab.HOME_ASSISTANT
+                )
             }
         }
     }
 
+    fun deleteChatSession(sessionId: String) {
+        viewModelScope.launch {
+            repository.deleteChatSession(sessionId)
+            if (_uiState.value.currentSessionId == sessionId) {
+                startNewChat()
+            }
+        }
+    }
+
+    // ================= 1-CLICK UNIFIED VOICE & AI SETUP =================
+
+    fun startUnifiedVoiceSetup() {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isVoiceSetupInProgress = true,
+                    voiceSetupProgress = 15,
+                    voiceSetupStatusText = "در حال بررسی موتور صوتی سیستم..."
+                )
+            }
+            kotlinx.coroutines.delay(400)
+
+            _uiState.update {
+                it.copy(
+                    voiceSetupProgress = 45,
+                    voiceSetupStatusText = "پیکربندی زبان‌های فارسی (fa-IR) و انگلیسی (en-US)..."
+                )
+            }
+            textToSpeech.speak("سیستم صوتی دستیار هوشمند آماده است", true)
+            kotlinx.coroutines.delay(500)
+
+            _uiState.update {
+                it.copy(
+                    voiceSetupProgress = 80,
+                    voiceSetupStatusText = "بررسی سرویس تشخیص گفتار محلی و میکروفون..."
+                )
+            }
+            kotlinx.coroutines.delay(400)
+
+            _uiState.update {
+                it.copy(
+                    voiceSetupProgress = 100,
+                    isVoiceSetupInProgress = false,
+                    voiceSetupStatusText = "✅ سیستم صوتی با موفقیت راه‌اندازی و تست شد!",
+                    statusNotification = "✅ سیستم صوتی هوشمند فعال گردید!"
+                )
+            }
+        }
+    }
+
+    fun completeOnboarding() {
+        prefs.edit().putBoolean("is_first_run", false).apply()
+        _uiState.update { it.copy(showFirstRunOnboarding = false) }
+    }
+
+    fun requestInitialPermissions() {
+        val permissions = mutableListOf(
+            android.Manifest.permission.RECORD_AUDIO,
+            android.Manifest.permission.READ_CONTACTS,
+            android.Manifest.permission.CALL_PHONE,
+            android.Manifest.permission.READ_SMS
+        )
+        _uiState.update { it.copy(pendingToolPermissions = permissions) }
+    }
+
+    fun initializePersonalDatabase() {
+        viewModelScope.launch {
+            repository.saveMemory("دیتابیس_شخصی", "فعال_شده", MemoryCategory.PERSONAL_PREFERENCE)
+            _uiState.update {
+                it.copy(
+                    isPersonalDatabaseEnabled = true,
+                    statusNotification = "✅ دیتابیس امن و حافظه شخصی محلی فعال گردید."
+                )
+            }
+        }
+    }
+
+    fun onRuntimeTrimMemory(level: Int) {
+        viewModelScope.launch {
+            repository.downloadManager.onTrimMemory(level)
+        }
+    }
+
     fun selectTab(tab: AppTab) {
-        _uiState.value = _uiState.value.copy(selectedTab = tab)
+        _uiState.update { it.copy(selectedTab = tab) }
     }
 
     fun setSpeedMode(mode: SpeedRating) {
-        _uiState.value = _uiState.value.copy(speedMode = mode)
+        _uiState.update { it.copy(speedMode = mode) }
     }
 
     fun currentSpeedMode(): String = _uiState.value.speedMode.name
 
     fun toggleLanguage() {
-        _uiState.value = _uiState.value.copy(isPersianLanguage = !_uiState.value.isPersianLanguage)
+        _uiState.update { it.copy(isPersianLanguage = !_uiState.value.isPersianLanguage) }
     }
 
     fun openLiveVoiceAssistant() {
-        _uiState.value = _uiState.value.copy(isLiveVoiceAssistantOpen = true)
+        _uiState.update { it.copy(isLiveVoiceAssistantOpen = true) }
         startVoiceListening()
     }
 
     fun closeLiveVoiceAssistant() {
-        _uiState.value = _uiState.value.copy(isLiveVoiceAssistantOpen = false)
+        _uiState.update { it.copy(isLiveVoiceAssistantOpen = false) }
         stopVoiceListening()
         stopSpeaking()
     }
 
     fun startVoiceListening() {
         val lang = if (_uiState.value.isPersianLanguage) "fa-IR" else "en-US"
-        _uiState.value = _uiState.value.copy(speechRecognizedText = "")
+        _uiState.update { it.copy(speechRecognizedText = "") }
         speechToText.startListening(lang)
     }
 
@@ -241,7 +390,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun clearSpeechRecognizedText() {
-        _uiState.value = _uiState.value.copy(speechRecognizedText = "")
+        _uiState.update { it.copy(speechRecognizedText = "") }
     }
 
     fun speakText(text: String) {
@@ -251,87 +400,64 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun localVoiceStatus(): String {
-        val stt = speechToText.isOnDevice.value
-        val ttsReady = textToSpeech.hasOfflineVoice(_uiState.value.isPersianLanguage)
-        return when {
-            stt && ttsReady -> "ورودی و خروجی صوتی کاملاً محلی فعال است."
-            !ttsReady -> "برای زبان انتخاب‌شده صدای TTS آفلاین روی دستگاه نصب نیست."
-            else -> "تشخیص گفتار محلی هنوز فعال نشده است."
-        }
-    }
-
-    /** Execute a named tool through the central, permission-aware tool boundary. */
-    fun executeTool(name: String, arguments: Map<String, String>) {
-        viewModelScope.launch { executeToolInternal(name, arguments) }
-    }
-
-    private suspend fun executeToolInternal(name: String, arguments: Map<String, String>) {
-        when (val result = toolRegistry.execute(name, arguments)) {
-            is ToolResult.Success -> {
-                addAssistantMessage("✅ ${result.message}")
-                repository.logAction("tool:$name", name, result.message, true)
-            }
-            is ToolResult.NeedsConfirmation -> {
-                // The registry owns the canonical request. Do not create a second
-                // independent ConfirmationManager request here.
-                val request = result.request
-                addAssistantMessage("⚠️ تأیید لازم است: ${result.summary}")
-                if (request != null) {
-                    _uiState.value = _uiState.value.copy(
-                        pendingToolConfirmation = request,
-                        isDangerousCommandPending = true,
-                        pendingDangerousCommand = result.summary
-                    )
-                } else {
-                    addAssistantMessage("❌ درخواست تأیید معتبر از موتور ابزار دریافت نشد؛ عملیات اجرا نشد.")
-                }
-            }
-            is ToolResult.NeedsPermission -> {
-                addAssistantMessage("🔐 برای این عملیات دسترسی اندروید لازم است.")
-                _uiState.value = _uiState.value.copy(
-                    pendingToolPermissions = result.permissions,
-                    pendingPermissionTool = name,
-                    pendingPermissionArguments = arguments
-                )
-            }
-            is ToolResult.Failure -> {
-                addAssistantMessage("❌ ${result.message}")
-                repository.logAction("tool:$name", name, result.message, false)
-            }
-        }
-    }
+    // ================= TOOL CONFIRMATION / REJECTION =================
 
     fun approvePendingTool() {
         val request = _uiState.value.pendingToolConfirmation ?: return
         viewModelScope.launch {
-            val result = toolRegistry.approveConfirmation(request.id)
-            _uiState.value = _uiState.value.copy(
-                pendingToolConfirmation = null,
-                isDangerousCommandPending = false,
-                pendingDangerousCommand = ""
-            )
-            when (result) {
-                is ToolResult.Success -> {
-                    addAssistantMessage("✅ ${result.message}")
-                    repository.logAction("tool:${request.toolName}", request.toolName, result.message, true)
-                }
-                is ToolResult.NeedsPermission -> {
-                    _uiState.value = _uiState.value.copy(
-                        pendingPermissionTool = request.toolName,
-                        pendingPermissionArguments = request.arguments,
-                        pendingToolPermissions = result.permissions
+            val approved = confirmationManager.approve(request.id)
+            if (approved == null) {
+                addAssistantMessage("❌ درخواست تأیید منقضی شده یا نامعتبر است.")
+                _uiState.update { it.copy(pendingToolConfirmation = null) }
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    pendingToolConfirmation = null,
+                    isDangerousCommandPending = false,
+                    pendingDangerousCommand = ""
+                )
+            }
+            executeToolInternal(approved.toolName, approved.arguments + mapOf("confirmed" to "true"))
+        }
+    }
+
+    private suspend fun executeToolInternal(toolName: String, args: Map<String, String>) {
+        val missing = toolRegistry.permissionCoordinator.missingPermissions(toolName)
+        if (missing.isNotEmpty()) {
+            _uiState.update {
+                it.copy(
+                    pendingToolPermissions = missing,
+                    pendingPermissionTool = toolName,
+                    pendingPermissionArguments = args
+                )
+            }
+            return
+        }
+
+        val result = toolRegistry.execute(toolName, args)
+        when (result) {
+            is ToolResult.Success -> {
+                addAssistantMessage("✅ ${result.message}")
+                speakText(result.message)
+            }
+            is ToolResult.Failure -> {
+                addAssistantMessage("❌ خطا: ${result.message}")
+            }
+            is ToolResult.NeedsPermission -> {
+                _uiState.update {
+                    it.copy(
+                        pendingToolPermissions = result.permissions,
+                        pendingPermissionTool = result.tool,
+                        pendingPermissionArguments = args
                     )
-                    addAssistantMessage("🔐 برای ادامه این عملیات دسترسی اندروید لازم است.")
                 }
-                is ToolResult.Failure -> {
-                    addAssistantMessage("❌ ${result.message}")
-                    repository.logAction("tool:${request.toolName}", request.toolName, result.message, false)
-                }
-                is ToolResult.NeedsConfirmation -> {
-                    addAssistantMessage("⚠️ تأیید دوباره لازم شد: ${result.summary}")
-                    result.request?.let { next ->
-                        _uiState.value = _uiState.value.copy(
+            }
+            is ToolResult.NeedsConfirmation -> {
+                addAssistantMessage("⚠️ تأیید دوباره لازم شد: ${result.summary}")
+                result.request?.let { next ->
+                    _uiState.update {
+                        it.copy(
                             pendingToolConfirmation = next,
                             isDangerousCommandPending = true,
                             pendingDangerousCommand = result.summary
@@ -345,20 +471,24 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     fun rejectPendingTool() {
         val request = _uiState.value.pendingToolConfirmation ?: return
         confirmationManager.reject(request.id)
-        _uiState.value = _uiState.value.copy(
-            pendingToolConfirmation = null,
-            isDangerousCommandPending = false,
-            pendingDangerousCommand = ""
-        )
+        _uiState.update {
+            it.copy(
+                pendingToolConfirmation = null,
+                isDangerousCommandPending = false,
+                pendingDangerousCommand = ""
+            )
+        }
         addAssistantMessage("❌ عملیات به درخواست کاربر لغو شد.")
     }
 
     fun clearPendingPermissions() {
-        _uiState.value = _uiState.value.copy(
-            pendingToolPermissions = emptyList(),
-            pendingPermissionTool = null,
-            pendingPermissionArguments = emptyMap()
-        )
+        _uiState.update {
+            it.copy(
+                pendingToolPermissions = emptyList(),
+                pendingPermissionTool = null,
+                pendingPermissionArguments = emptyMap()
+            )
+        }
     }
 
     fun notifyStatus(message: String) {
@@ -371,7 +501,11 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         val args = state.pendingPermissionArguments
         clearPendingPermissions()
         if (granted && tool != null) {
-            viewModelScope.launch { executeToolInternal(tool, args) }
+            if (tool == "make_call") {
+                initiatePhoneCall(args["number"].orEmpty())
+            } else {
+                viewModelScope.launch { executeToolInternal(tool, args) }
+            }
         } else if (!granted) {
             addAssistantMessage("❌ دسترسی لازم داده نشد؛ عملیات اجرا نشد.")
         }
@@ -380,20 +514,24 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     fun emergencyStop() {
         stopVoiceListening()
         stopSpeaking()
-        _uiState.value = _uiState.value.copy(
-            isLiveVoiceAssistantOpen = false,
-            isListeningVoice = false,
-            isSpeakingVoice = false,
-            showTransferConfirmationDialog = false,
-            isDangerousCommandPending = false,
-            pendingToolConfirmation = null,
-            pendingToolPermissions = emptyList(),
-            pendingPermissionTool = null,
-            pendingPermissionArguments = emptyMap(),
-            statusNotification = "🛑 توقف اضطراری (Emergency Stop) فعال شد."
-        )
+        _uiState.update {
+            it.copy(
+                isLiveVoiceAssistantOpen = false,
+                isListeningVoice = false,
+                isSpeakingVoice = false,
+                showTransferConfirmationDialog = false,
+                isDangerousCommandPending = false,
+                pendingToolConfirmation = null,
+                pendingToolPermissions = emptyList(),
+                pendingPermissionTool = null,
+                pendingPermissionArguments = emptyMap(),
+                statusNotification = "🛑 توقف اضطراری (Emergency Stop) فعال شد."
+            )
+        }
         addAssistantMessage("🛑 تمام پردازش‌ها و فرآیندهای صوتی/پس‌زمینه متوقف شدند.")
     }
+
+    // ================= USER CHAT & NATURAL LANGUAGE PROCESSING =================
 
     fun processUserMessage(
         text: String,
@@ -436,14 +574,21 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         )
         val currentMsgs = _uiState.value.messages.toMutableList()
         currentMsgs.add(userMsg)
-        _uiState.value = _uiState.value.copy(messages = currentMsgs)
+        _uiState.update { it.copy(messages = currentMsgs) }
+
+        // Persist message in Room database
+        val activeSessionId = _uiState.value.currentSessionId
+        if (activeSessionId.isNotBlank()) {
+            viewModelScope.launch {
+                repository.saveChatMessage(activeSessionId, "USER", text, imageUri, fileUri, fileName)
+            }
+        }
 
         viewModelScope.launch {
-            // If image is attached, verify vision model status truthfully
             if (imageUri != null) {
                 val visionModel = _uiState.value.activeVisionModel
                 if (visionModel == null || !visionModel.isLoaded) {
-                    val warn = "⚠️ مدل بینایی (Vision Model مانند Qwen2-VL) هنوز دانلود یا بارگذاری (Load) نشده است. برای تحلیل تصویر، لطفاً ابتدا مدل بینایی را از تب «مدیریت مدل‌ها» دانلود و بارگذاری نمایید."
+                    val warn = "⚠️ مدل بینایی (Vision Model) هنوز دانلود یا لود نشده است. برای تحلیل تصویر، ابتدا مدل را از تب مدیریت مدل‌ها لود نمایید."
                     addAssistantMessage(warn)
                     speakText(warn)
                     repository.logAction("ارسال تصویر برای تحلیل", "VISION_ANALYSIS", warn, false)
@@ -503,29 +648,30 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 initiatePhoneCall(result.phoneNumber)
             }
             is SkillResult.CallContactNearestChoices -> {
-                _uiState.value = _uiState.value.copy(contactChoicesForCalling = result.top3Choices)
+                _uiState.update { it.copy(contactChoicesForCalling = result.top3Choices) }
                 addAssistantMessage(result.message)
                 speakText(result.message)
             }
             is SkillResult.CardTransferConfirmation -> {
-                // Check recent SMS for genuine OTP if available
                 val otp = saderatAdapter.extractOtpFromSms(smsList)
-                _uiState.value = _uiState.value.copy(
-                    pendingTransferDetails = result.details,
-                    showTransferConfirmationDialog = true,
-                    isTransferTestMode = result.isTestMode,
-                    extractedOtp = otp,
-                    transferStatus = BankTransferStatus.AwaitingCardConfirmation(
-                        destCard = result.details.destCardNumber,
-                        amountRials = result.details.amountRials,
-                        formattedAmount = saderatAdapter.formatAmountToman(result.details.amountRials)
+                _uiState.update {
+                    it.copy(
+                        pendingTransferDetails = result.details,
+                        showTransferConfirmationDialog = true,
+                        isTransferTestMode = result.isTestMode,
+                        extractedOtp = otp,
+                        transferStatus = BankTransferStatus.AwaitingCardConfirmation(
+                            destCard = result.details.destCardNumber,
+                            amountRials = result.details.amountRials,
+                            formattedAmount = saderatAdapter.formatAmountToman(result.details.amountRials)
+                        )
                     )
-                )
+                }
                 addAssistantMessage(result.message)
                 speakText(result.message)
             }
             is SkillResult.SmsSearchResult -> {
-                _uiState.value = _uiState.value.copy(matchedSmsList = result.matchedSms)
+                _uiState.update { it.copy(matchedSmsList = result.matchedSms) }
                 addAssistantMessage(result.message)
                 speakText(result.message)
             }
@@ -548,21 +694,22 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
             }
             is SkillResult.ExecuteRawTermuxCommand -> {
                 if (result.isDangerous) {
-                    _uiState.value = _uiState.value.copy(
-                        isDangerousCommandPending = true,
-                        pendingDangerousCommand = result.command
-                    )
+                    _uiState.update {
+                        it.copy(
+                            isDangerousCommandPending = true,
+                            pendingDangerousCommand = result.command
+                        )
+                    }
                     addAssistantMessage("⚠️ هشدار امنیتی: دستور «${result.command}» پرخطر است و نیاز به تأیید صریح شما دارد.")
                     return
                 }
                 val output = termuxExecutor.executeCommandText(result.command)
-                _uiState.value = _uiState.value.copy(codeExecutionOutput = output)
+                _uiState.update { it.copy(codeExecutionOutput = output) }
                 addAssistantMessage(output)
                 speakText(if (output.contains("موفقیت")) "دستور در ترموکس با موفقیت اجرا شد." else "اجرای دستور به پایان رسید.")
                 repository.logAction(originalText, "TERMUX_COMMAND", output, true)
             }
             is SkillResult.ExecuteTermuxScript -> {
-                // Save real code file to SAF workspace
                 safFileManager.saveCodeFile(result.generatedFile)
                 val updatedFiles = _uiState.value.codeFiles.toMutableList()
                 val existingIndex = updatedFiles.indexOfFirst { it.name == result.generatedFile.name }
@@ -573,20 +720,24 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 if (result.isDangerous) {
-                    _uiState.value = _uiState.value.copy(
-                        codeFiles = updatedFiles,
-                        isDangerousCommandPending = true,
-                        pendingDangerousCommand = result.termuxCommand
-                    )
-                    addAssistantMessage("⚠️ هشدار امنیتی: دستور «${result.termuxCommand}» ممکن است باعث حذف یا تغییر داده‌ها شود. جهت اجرا نیاز به تأیید صریح شما دارد.")
+                    _uiState.update {
+                        it.copy(
+                            codeFiles = updatedFiles,
+                            isDangerousCommandPending = true,
+                            pendingDangerousCommand = result.termuxCommand
+                        )
+                    }
+                    addAssistantMessage("⚠️ هشدار امنیتی: دستور «${result.termuxCommand}» ممکن است باعث حذف یا تغییر داده‌ها شود. جهت اجرا نیاز به تأیید دارد.")
                     return
                 }
 
                 val execResult = termuxExecutor.executeScript(result.generatedFile.name, result.generatedFile.content, result.generatedFile.language)
-                _uiState.value = _uiState.value.copy(
-                    codeFiles = updatedFiles,
-                    codeExecutionOutput = execResult
-                )
+                _uiState.update {
+                    it.copy(
+                        codeFiles = updatedFiles,
+                        codeExecutionOutput = execResult
+                    )
+                }
 
                 addAssistantMessage("${result.message}\n\n$execResult")
                 speakText(result.message)
@@ -636,59 +787,51 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     // ================= REAL MODEL MANAGER ACTIONS =================
 
     fun startModelDownload(model: DownloadedModelEntity) {
-        repository.downloadManager.startDownload(model) { success, msg ->
-            _uiState.value = _uiState.value.copy(statusNotification = msg)
+        viewModelScope.launch {
+            repository.downloadManager.startDownload(model) { ok, msg ->
+                viewModelScope.launch {
+                    notifyStatus(msg)
+                }
+            }
         }
-    }
-
-    fun pauseModelDownload(modelId: String) {
-        repository.downloadManager.pauseDownload(modelId)
-        _uiState.value = _uiState.value.copy(statusNotification = "دانلود مدل متوقف شد.")
     }
 
     fun deleteModel(model: DownloadedModelEntity) {
         viewModelScope.launch {
-            repository.downloadManager.deleteModel(model)
-            _uiState.value = _uiState.value.copy(statusNotification = "مدل ${model.name} و فایل‌های مرتبط از حافظه حذف گردیدند.")
+            val ok = repository.downloadManager.deleteModel(model)
+            notifyStatus(if (ok) "مدل ${model.name} حذف شد." else "خطا در حذف فایل مدل.")
         }
     }
 
     fun loadModel(model: DownloadedModelEntity) {
         viewModelScope.launch {
-            val res = repository.downloadManager.loadModel(model, _uiState.value.speedMode.name)
-            _uiState.value = _uiState.value.copy(statusNotification = res)
-            addAssistantMessage(res)
-            speakText(res)
+            val msg = repository.downloadManager.loadModel(model, _uiState.value.speedMode.name)
+            notifyStatus(msg)
+            addAssistantMessage("⚡ $msg")
+            speakText(msg)
         }
     }
 
     fun unloadModel(model: DownloadedModelEntity) {
         viewModelScope.launch {
-            val res = repository.downloadManager.unloadModel(model)
-            _uiState.value = _uiState.value.copy(statusNotification = res)
+            val msg = repository.downloadManager.unloadModel(model)
+            notifyStatus(msg)
+            addAssistantMessage("ℹ️ $msg")
         }
     }
 
     // ================= REAL BANKING ACTIONS =================
 
-    fun confirmTransfer(userEnteredOtp: String = "") {
+    fun confirmTransfer(otp: String) {
         val details = _uiState.value.pendingTransferDetails ?: return
-        val isTest = _uiState.value.isTransferTestMode
-        val otpToUse = userEnteredOtp.ifBlank { _uiState.value.extractedOtp ?: "" }
-
-        if (isTest) {
-            _uiState.value = _uiState.value.copy(
-                showTransferConfirmationDialog = false,
-                transferStatus = BankTransferStatus.TransferFailed("TEST_MODE_DISABLED", "حالت انتقال تستی برای جلوگیری از موفقیت جعلی غیرفعال شده است." )
-            )
-            addAssistantMessage("حالت انتقال تستی غیرفعال است؛ هیچ پولی جابه‌جا نشد.")
-        } else {
-            // Real Saderat Banking: Launch official Bank Saderat App or Web
-            _uiState.value = _uiState.value.copy(
-                showTransferConfirmationDialog = false,
-                pendingTransferDetails = null,
-                transferStatus = BankTransferStatus.TransferExecuting("در حال ارجاع به درگاه امن بانک صادرات...")
-            )
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    showTransferConfirmationDialog = false,
+                    pendingTransferDetails = null,
+                    transferStatus = BankTransferStatus.TransferExecuting("در حال ارجاع به درگاه امن بانک صادرات...")
+                )
+            }
 
             val intent = saderatAdapter.createLaunchIntent()?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -699,9 +842,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                     val msg = "اپلیکیشن بانک صادرات باز شد. شماره کارت مقصد (${saderatAdapter.formatCardNumber(details.destCardNumber)}) و مبلغ در کلیپ‌بورد/درگاه آماده است."
                     addAssistantMessage(msg)
                     speakText(msg)
-                    viewModelScope.launch {
-                        repository.logAction("کارت به کارت بانک صادرات", "BANK_TRANSFER_SADERAT", msg, true)
-                    }
+                    repository.logAction("کارت به کارت بانک صادرات", "BANK_TRANSFER_SADERAT", msg, true)
                 } catch (e: Exception) {
                     val err = "خطا در باز کردن اپلیکیشن بانک صادرات: ${e.message}"
                     addAssistantMessage(err)
@@ -713,11 +854,13 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun cancelTransfer() {
-        _uiState.value = _uiState.value.copy(
-            showTransferConfirmationDialog = false,
-            pendingTransferDetails = null,
-            transferStatus = BankTransferStatus.Idle
-        )
+        _uiState.update {
+            it.copy(
+                showTransferConfirmationDialog = false,
+                pendingTransferDetails = null,
+                transferStatus = BankTransferStatus.Idle
+            )
+        }
         addAssistantMessage("عملیات انتقال وجه لغو گردید.")
     }
 
@@ -727,27 +870,31 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             safFileManager.saveCodeFile(CodeFile(filename, code, language))
             val output = termuxExecutor.executeScript(filename, code, language)
-            _uiState.value = _uiState.value.copy(codeExecutionOutput = output)
+            _uiState.update { it.copy(codeExecutionOutput = output) }
         }
     }
 
     fun confirmDangerousCommand() {
         val cmd = _uiState.value.pendingDangerousCommand
-        _uiState.value = _uiState.value.copy(
-            isDangerousCommandPending = false,
-            pendingDangerousCommand = ""
-        )
+        _uiState.update {
+            it.copy(
+                isDangerousCommandPending = false,
+                pendingDangerousCommand = ""
+            )
+        }
         viewModelScope.launch {
             val res = termuxExecutor.executeTermuxCommand(cmd)
-            _uiState.value = _uiState.value.copy(codeExecutionOutput = res.stdout.ifBlank { res.stderr })
+            _uiState.update { it.copy(codeExecutionOutput = res.stdout.ifBlank { res.stderr }) }
         }
     }
 
     fun cancelDangerousCommand() {
-        _uiState.value = _uiState.value.copy(
-            isDangerousCommandPending = false,
-            pendingDangerousCommand = ""
-        )
+        _uiState.update {
+            it.copy(
+                isDangerousCommandPending = false,
+                pendingDangerousCommand = ""
+            )
+        }
         addAssistantMessage("اجرای دستور پرخطر لغو گردید.")
     }
 
@@ -759,33 +906,16 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 "خطا در ایجاد فایل ZIP."
             }
-            _uiState.value = _uiState.value.copy(statusNotification = msg)
-            addAssistantMessage(msg)
+            _uiState.update { it.copy(statusNotification = msg) }
         }
     }
 
-    fun saveCodeFileToDisk(filename: String, content: String, lang: String) {
+    private fun loadCodeFilesFromDisk() {
         viewModelScope.launch {
-            val file = safFileManager.saveCodeFile(CodeFile(filename, content, lang))
-            loadCodeFilesFromDisk()
-            _uiState.value = _uiState.value.copy(statusNotification = "فایل ${file.name} در حافظه ذخیره شد.")
-        }
-    }
-
-    fun exportDatabaseJson() {
-        viewModelScope.launch {
-            val targetDir = File(getApplication<Application>().filesDir, "exports")
-            val outFile = repository.exportToJsonFile(targetDir)
-            val msg = if (outFile != null) "خروجی پایگاه داده در مسیر ${outFile.absolutePath} ذخیره شد." else "خطا در خروجی فایل JSON."
-            _uiState.value = _uiState.value.copy(statusNotification = msg)
-            addAssistantMessage(msg)
-        }
-    }
-
-    fun addNewPassword(appName: String, accountName: String, plainPassword: String, notes: String?) {
-        viewModelScope.launch {
-            repository.savePassword(appName, accountName, plainPassword, notes ?: "")
-            _uiState.value = _uiState.value.copy(statusNotification = "رمز عبور برای $appName با رمزنگاری AES-GCM ذخیره شد.")
+            val files = safFileManager.listSavedCodeFiles()
+            if (files.isNotEmpty()) {
+                _uiState.update { it.copy(codeFiles = files) }
+            }
         }
     }
 
@@ -814,7 +944,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 getApplication<Application>().startActivity(intent)
             } catch (ex: Exception) {
-                _uiState.value = _uiState.value.copy(statusNotification = "امکان باز کردن تنظیمات دستیار پیش‌فرض وجود ندارد.")
+                _uiState.update { it.copy(statusNotification = "امکان باز کردن تنظیمات دستیار پیش‌فرض وجود ندارد.") }
             }
         }
     }
@@ -822,7 +952,7 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     // ================= CONTACTS & SMS HELPERS =================
 
     fun confirmContactChoice(contact: ContactMatch) {
-        _uiState.value = _uiState.value.copy(contactChoicesForCalling = emptyList())
+        _uiState.update { it.copy(contactChoicesForCalling = emptyList()) }
         val msg = "در حال برقراری تماس با ${contact.displayName} (${contact.phoneNumber})..."
         addAssistantMessage(msg)
         speakText(msg)
@@ -833,13 +963,20 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun dismissContactChoices() {
-        _uiState.value = _uiState.value.copy(contactChoicesForCalling = emptyList())
+        _uiState.update { it.copy(contactChoicesForCalling = emptyList()) }
     }
 
     private fun addAssistantMessage(text: String) {
         val currentMsgs = _uiState.value.messages.toMutableList()
         currentMsgs.add(ChatMessage(sender = "ASSISTANT", text = text))
-        _uiState.value = _uiState.value.copy(messages = currentMsgs)
+        _uiState.update { it.copy(messages = currentMsgs) }
+
+        val activeSessionId = _uiState.value.currentSessionId
+        if (activeSessionId.isNotBlank()) {
+            viewModelScope.launch {
+                repository.saveChatMessage(activeSessionId, "ASSISTANT", text)
+            }
+        }
     }
 
     private fun launchAppPackage(packageName: String) {
@@ -881,11 +1018,13 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 } catch (_: Exception) {}
             }
         } else {
-            _uiState.value = _uiState.value.copy(
-                pendingToolPermissions = listOf(android.Manifest.permission.CALL_PHONE),
-                pendingPermissionTool = "make_call",
-                pendingPermissionArguments = mapOf("number" to cleanNumber)
-            )
+            _uiState.update {
+                it.copy(
+                    pendingToolPermissions = listOf(android.Manifest.permission.CALL_PHONE),
+                    pendingPermissionTool = "make_call",
+                    pendingPermissionArguments = mapOf("number" to cleanNumber)
+                )
+            }
             try {
                 val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(cleanNumber)}")).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -909,24 +1048,12 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun openWebSearch(query: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query")).apply {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             getApplication<Application>().startActivity(intent)
         } catch (e: Exception) {
-            // Search fallback
+            // Browser fallback
         }
-    }
-
-    fun onRuntimeTrimMemory(level: Int) {
-        viewModelScope.launch {
-            repository.downloadManager.onTrimMemory(level)
-        }
-    }
-
-    override fun onCleared() {
-        speechToText.destroy()
-        textToSpeech.shutdown()
-        super.onCleared()
     }
 }

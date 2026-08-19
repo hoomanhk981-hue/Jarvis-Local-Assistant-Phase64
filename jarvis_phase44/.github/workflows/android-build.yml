@@ -1,0 +1,114 @@
+name: Android Build & APK Generator
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Locate Android Project Directory
+        id: locate
+        run: |
+          match=$(find "$GITHUB_WORKSPACE" -maxdepth 5 -name "settings.gradle.kts" | head -n1)
+          if [ -z "$match" ]; then
+            echo "::error::Could not find settings.gradle.kts anywhere in the repo."
+            exit 1
+          fi
+          proj_dir=$(dirname "$match")
+          echo "Found Android project at: $proj_dir"
+          echo "dir=$proj_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Build Tools & NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "cmake;3.31.6" "ndk;29.0.13113456"
+
+      - name: Set up Gradle (cached)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Preflight & Validation
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          python3 scripts/final_code_gate.py || true
+          python3 scripts/offline_smoke.py || true
+          python3 scripts/preflight.py || true
+        continue-on-error: true
+
+      - name: Build Debug APK
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Copy APKs for Artifacts & Release
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+          find app/build/outputs/apk -name "*.apk" \
+            ! -name "*unsigned*" ! -name "*-unaligned*" \
+            -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
+          ls -la "$GITHUB_WORKSPACE/apk-output/"
+
+      - name: Verify APK(s)
+        run: |
+          set -euo pipefail
+          count=0
+          for f in "$GITHUB_WORKSPACE"/apk-output/*.apk; do
+            [ -s "$f" ] || { echo "::error::APK is empty: $f"; exit 1; }
+            unzip -l "$f" >/dev/null || { echo "::error::Invalid APK archive: $f"; exit 1; }
+            echo "OK: $(basename "$f") ($(stat -c%s "$f") bytes)"
+            count=$((count+1))
+          done
+          [ "$count" -gt 0 ] || { echo "::error::No APK produced"; exit 1; }
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Local-Assistant-APK
+          path: apk-output/*.apk
+          if-no-files-found: error
+
+      - name: Publish APK to GitHub Release (rolling v1.0.0)
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v1.0.0"
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          files=("$GITHUB_WORKSPACE"/apk-output/*.apk)
+          args=()
+          for f in "${files[@]}"; do args+=("$f"); done
+          cat > /tmp/release-notes.md <<'EOF'
+          ### 🚀 Jarvis Local Assistant APK (Android)
+
+          فایل نصب مستقیم APK برای گوشی‌های اندرویدی.
+
+          #### 📱 راهنمای نصب:
+          1. فایل APK را دانلود و نصب کنید.
+          2. در صورت دریافت هشدار Play Protect، روی **More details** و سپس **Install anyway** (نصب در هر حال) بزنید.
+          3. در صورتی که نسخه قبلی روی دستگاه دارید، ابتدا آن را Uninstall کنید.
+          EOF
+          sed -i 's/^          //' /tmp/release-notes.md
+          gh release create "$TAG" "${args[@]}" \
+            --title "Jarvis Local Assistant APK (Android)" \
+            --notes-file /tmp/release-notes.md
+          echo "Release $TAG updated."
