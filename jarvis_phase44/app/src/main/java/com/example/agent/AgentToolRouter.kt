@@ -9,6 +9,7 @@ enum class ToolId {
     SMS,
     CONTACTS,
     MEMORY,
+    TERMUX,
     WEB_SEARCH,
     DEVICE_ACTIONS,
     FILE_DOCUMENT,
@@ -29,46 +30,46 @@ data class ToolPlan(
 )
 
 /**
- * Deterministic first-pass router.
- *
- * The local LLM can refine/confirm this plan, but safety-sensitive tools are
- * never implicitly authorized by classification alone.
+ * Deterministic first-pass router for natural language user requests.
  */
 class AgentToolRouter {
 
     fun plan(request: ToolRequest): ToolPlan {
         val text = request.userText.trim().lowercase()
 
-        if (request.hasImage) {
-            return ToolPlan(listOf(ToolId.VISION), reason = "Image input detected.")
+        if (request.hasImage || containsAny(text, "عکس", "تصویر", "این چیه", "عکس رو ببین", "photo", "image")) {
+            return ToolPlan(listOf(ToolId.VISION), reason = "Image/Vision intent detected.")
         }
 
-        if (containsAny(text, "پیامک", "sms", "اس ام اس")) {
+        if (containsAny(text, "پیامک", "sms", "اس ام اس", "پیام ها", "پیام‌ها", "پیامم", "صندوق پیام")) {
             return ToolPlan(listOf(ToolId.SMS), reason = "SMS intent detected.")
         }
 
-        if (containsAny(text, "مخاطب", "کانتکت", "تماس")) {
-            return ToolPlan(listOf(ToolId.CONTACTS), reason = "Contact intent detected.")
+        if (containsAny(text, "زنگ بزن", "تماس بگیر", "تماس با", "شماره بگیر", "مخاطب", "کانتکت", "call", "dial")) {
+            return ToolPlan(listOf(ToolId.CONTACTS), reason = "Contact/Calling intent detected.")
         }
 
-        if (containsAny(text, "باز کن", "بازکردن", "open") &&
-            containsAny(text, "برنامه", "اپ", "app", "application")) {
+        if (containsAny(text, "ترموکس", "termux", "دستور اجرا", "کامند", "ترمینال", "python --version", "pkg install")) {
+            return ToolPlan(listOf(ToolId.TERMUX), reason = "Termux execution intent detected.")
+        }
+
+        if (containsAny(text, "باز کن", "بازش کن", "رو باز کن", "برو تو", "برو توی", "اجرا کن", "رو بیار", "open", "launch")) {
             return ToolPlan(listOf(ToolId.APP_LAUNCHER), reason = "App-launch intent detected.")
         }
 
-        if (containsAny(text, "فایل", "سند", "pdf", "عکس", "document")) {
+        if (containsAny(text, "فایل", "سند", "pdf", "پوشه", "workspace", "document", "فایل متنی")) {
             return ToolPlan(listOf(ToolId.FILE_DOCUMENT), reason = "File/document intent detected.")
         }
 
-        if (containsAny(text, "یادم", "به خاطر بسپار", "ذخیره کن", "حافظه")) {
-            return ToolPlan(listOf(ToolId.MEMORY), reason = "Memory intent detected.")
+        if (containsAny(text, "یادم", "به خاطر بسپار", "یادداشت کن", "رمز", "پسورد", "ذخیره کن", "چیه رمز", "رمز من")) {
+            return ToolPlan(listOf(ToolId.MEMORY), reason = "Memory/Vault intent detected.")
         }
 
-        if (containsAny(text, "بانک", "کارت به کارت", "واریز", "انتقال وجه")) {
+        if (containsAny(text, "بانک", "کارت به کارت", "واریز", "انتقال وجه", "transfer", "صادرات")) {
             return ToolPlan(
                 listOf(ToolId.BANKING),
                 needsConfirmation = true,
-                reason = "Financial intent detected; explicit confirmation required."
+                reason = "Financial intent detected; explicit user confirmation required."
             )
         }
 

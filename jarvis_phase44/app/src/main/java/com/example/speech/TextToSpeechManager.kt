@@ -8,9 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
 
 /**
- * TTS wrapper that prefers an installed voice which does not require a network
- * connection. If no offline voice exists for the requested language, Jarvis
- * refuses to speak rather than silently switching to an online engine.
+ * Robust Text-to-Speech manager supporting Persian (fa-IR) and English (en-US).
+ * Uses installed offline voices when available, with automatic fallback to standard language packs.
  */
 class TextToSpeechManager(context: Context) : TextToSpeech.OnInitListener {
 
@@ -33,12 +32,6 @@ class TextToSpeechManager(context: Context) : TextToSpeech.OnInitListener {
         }
 
         val engine = tts ?: return
-        val hasAnyOfflineVoice = engine.voices?.any { !it.isNetworkConnectionRequired } == true
-        if (!hasAnyOfflineVoice) {
-            _errorState.value = "هیچ صدای TTS آفلاینی روی دستگاه نصب نیست."
-            return
-        }
-
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) { _isSpeaking.value = true }
             override fun onDone(utteranceId: String?) { _isSpeaking.value = false }
@@ -48,46 +41,63 @@ class TextToSpeechManager(context: Context) : TextToSpeech.OnInitListener {
         _errorState.value = null
     }
 
-    /** Returns true only when an installed voice for this locale is offline-capable. */
+    /** Returns true when a voice or language data for this locale is available. */
     fun hasOfflineVoice(isPersian: Boolean): Boolean {
         val locale = if (isPersian) Locale("fa", "IR") else Locale.US
-        return tts?.voices?.any { voice ->
+        val engine = tts ?: return false
+
+        val hasVoice = engine.voices?.any { voice ->
             !voice.isNetworkConnectionRequired &&
                 (voice.locale.language == locale.language) &&
                 (locale.country.isBlank() || voice.locale.country.isBlank() || voice.locale.country == locale.country)
         } == true
+
+        if (hasVoice) return true
+
+        val res = engine.isLanguageAvailable(locale)
+        return res >= TextToSpeech.LANG_AVAILABLE
     }
 
     fun speak(text: String, isPersian: Boolean = true): Boolean {
         if (tts == null || !_isInitialized.value || text.isBlank()) return false
 
         val locale = if (isPersian) Locale("fa", "IR") else Locale.US
-        val offlineVoice = tts?.voices
+        val engine = tts ?: return false
+
+        // 1. Try finding dedicated offline voice for this language
+        val offlineVoice = engine.voices
             ?.filter { !it.isNetworkConnectionRequired }
             ?.filter { it.locale.language == locale.language }
             ?.sortedByDescending { it.locale.country == locale.country }
             ?.firstOrNull()
 
-        if (offlineVoice == null) {
-            _errorState.value = if (isPersian) {
-                "صدای فارسی آفلاین روی دستگاه نصب نیست."
-            } else {
-                "صدای انگلیسی آفلاین روی دستگاه نصب نیست."
-            }
-            return false
-        }
-
         return try {
-            tts?.apply {
-                setVoice(offlineVoice)
-                setSpeechRate(0.95f)
-                setPitch(1.0f)
-                speak(text, TextToSpeech.QUEUE_FLUSH, null, "JARVIS_${System.currentTimeMillis()}")
+            if (offlineVoice != null) {
+                engine.voice = offlineVoice
+            } else {
+                val langResult = engine.setLanguage(locale)
+                if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    _errorState.value = if (isPersian) {
+                        "داده‌های صوتی زبان فارسی روی موتور TTS دستگاه نصب نیست."
+                    } else {
+                        "داده‌های صوتی زبان انگلیسی روی موتور TTS دستگاه نصب نیست."
+                    }
+                    return false
+                }
             }
-            _errorState.value = null
-            true
+
+            engine.setSpeechRate(0.95f)
+            engine.setPitch(1.0f)
+            val res = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "JARVIS_${System.currentTimeMillis()}")
+            if (res == TextToSpeech.SUCCESS) {
+                _errorState.value = null
+                true
+            } else {
+                _errorState.value = "پخش صدا با خطا مواجه شد."
+                false
+            }
         } catch (e: Exception) {
-            _errorState.value = "پخش TTS محلی ناموفق بود: ${e.message ?: "خطای ناشناخته"}"
+            _errorState.value = "پخش TTS ناموفق بود: ${e.message ?: "خطای ناشناخته"}"
             false
         }
     }

@@ -15,6 +15,7 @@ sealed class SkillResult {
     data class LaunchApp(val app: InstalledAppInfo, val statusMessage: String) : SkillResult()
     data class SearchAppWeb(val query: String, val message: String) : SkillResult()
     data class CallContactExact(val contact: ContactMatch, val message: String) : SkillResult()
+    data class CallPhoneNumberDirect(val phoneNumber: String, val displayName: String, val message: String) : SkillResult()
     data class CallContactNearestChoices(val top3Choices: List<ContactMatch>, val message: String) : SkillResult()
     data class CardTransferConfirmation(val details: TransferDetails, val message: String, val isTestMode: Boolean) : SkillResult()
     data class SmsSearchResult(val matchedSms: List<SmsMessageItem>, val message: String) : SkillResult()
@@ -22,6 +23,7 @@ sealed class SkillResult {
     data class ForwardSmsRequest(val targetContact: ContactMatch?, val content: String, val message: String) : SkillResult()
     data class GmailSummaryResult(val summaryText: String) : SkillResult()
     data class ExecuteTermuxScript(val generatedFile: CodeFile, val termuxCommand: String, val message: String, val isDangerous: Boolean = false) : SkillResult()
+    data class ExecuteRawTermuxCommand(val command: String, val message: String, val isDangerous: Boolean = false) : SkillResult()
     data class PasswordSaved(val appName: String, val passwordSecret: String, val message: String) : SkillResult()
     data class GetPasswordResult(val appName: String, val message: String) : SkillResult()
     data class KnowledgeSaved(val key: String, val value: String, val message: String) : SkillResult()
@@ -56,9 +58,8 @@ class AssistantSkillEngine(
         }
 
         // 1. Password & Credential Saving ("... یادت بمونه")
-        if (input.contains("  یادت بمونه") || query.contains("یادت بمونه") || query.contains("یادت باشه") || (query.contains("رمز عبور") && query.contains("ذخیره"))) {
+        if (input.contains("یادت بمونه") || query.contains("یادت بمونه") || query.contains("یادت باشه") || (query.contains("رمز عبور") && query.contains("ذخیره"))) {
             val cleanStr = input
-                .replace("  یادت بمونه", "")
                 .replace("یادت بمونه", "")
                 .replace("یادت باشه", "")
                 .replace("این پسورد", "")
@@ -96,8 +97,38 @@ class AssistantSkillEngine(
             )
         }
 
-        // 2. Termux & Script Execution
-        if (query.contains("ترموکس") || query.contains("termux") || (query.contains("کد") && (query.contains("بنویس") || query.contains("اجرا کن") || query.contains("ران کن")))) {
+        // 2. Open Termux App vs Execute Termux Commands
+        val isTermuxOpenIntent = (query.contains("ترموکس") || query.contains("termux")) &&
+            (query.contains("باز کن") || query.contains("بازش کن") || query.contains("برو تو") || query.startsWith("open")) &&
+            !query.contains("اجرا") && !query.contains("کامند") && !query.contains("دستور") && !query.contains("کد")
+
+        if (isTermuxOpenIntent) {
+            val termuxApp = installedApps.firstOrNull { it.packageName == "com.termux" }
+                ?: InstalledAppInfo("Termux", "com.termux")
+            return SkillResult.LaunchApp(termuxApp, "در حال باز کردن محیط ترموکس (Termux)...")
+        }
+
+        if (query.contains("ترموکس") || query.contains("termux") ||
+            (query.contains("کد") && (query.contains("بنویس") || query.contains("اجرا کن") || query.contains("ران کن"))) ||
+            query.startsWith("دستور ") || query.contains("در ترموکس") || query.contains("توی ترموکس")
+        ) {
+            // Extract raw command if user requested executing a specific command
+            var directCmd = ""
+            if (query.contains("رو اجرا کن") || query.contains("اجرا کن") || query.contains("بزن")) {
+                directCmd = input
+                    .replace(Regex("(?i)ترموکس|termux|توی ترموکس|در ترموکس|داخل ترموکس|رو توی ترموکس|رو در ترموکس|این دستور رو|دستور|کد|رو اجرا کن|اجرا کن|رو بزن|بزن|لطفا|لطفاً"), " ")
+                    .trim()
+            }
+
+            if (directCmd.isNotBlank() && !directCmd.contains("پایتون") && !directCmd.contains("کد بنویس")) {
+                val isDanger = termuxExecutor.isDangerousCommand(directCmd)
+                return SkillResult.ExecuteRawTermuxCommand(
+                    command = directCmd,
+                    message = "دستور «$directCmd» به ترموکس ارسال شد.",
+                    isDangerous = isDanger
+                )
+            }
+
             val scriptCode: String
             val filename: String
             val lang: String
@@ -137,7 +168,7 @@ int main() {
                 else -> {
                     filename = "script.sh"
                     lang = "bash"
-                    val cmdToRun = if (query.contains("آپدیت") || query.contains("update")) "pkg update && pkg upgrade -y" else "echo '[Jarvis Command]' && ls -la"
+                    val cmdToRun = if (query.contains("آپدیت") || query.contains("update")) "pkg update && pkg upgrade -y" else "echo '[Jarvis Command]' && pwd && ls -la"
                     scriptCode = """
 #!/bin/bash
 $cmdToRun
@@ -154,7 +185,7 @@ $cmdToRun
                 message = if (termuxExecutor.isTermuxInstalled()) {
                     "فایل $filename ایجاد و در فضای کاری ذخیره شد. دستور جهت اجرا به ترموکس ارسال می‌گردد."
                 } else {
-                    "فایل $filename ایجاد و ذخیره شد. برنامه ترموکس روی دستگاه یافت نشد؛ دستور آماده است: $termuxCmd"
+                    "فایل $filename ایجاد و ذخیره شد. برنامه ترموکس روی دستگاه نصب نیست؛ دستور آماده است: $termuxCmd"
                 },
                 isDangerous = isDanger
             )
@@ -163,7 +194,7 @@ $cmdToRun
         // 3. SMS Reading, Summarizing & OTP Extraction
         if (query.contains("اس ام اس") || query.contains("پیامک") || query.contains("sms") || query.contains("پیام ها") || query.contains("پیام‌ها")) {
             if (recentSms.isEmpty()) {
-                return SkillResult.GeneralAnswer("هیچ پیامکی در دستگاه یافت نشد یا مجوز دسترسی به پیامک‌ها (READ_SMS) هنوز داده نشده است.")
+                return SkillResult.GeneralAnswer("هیچ پیامکی در دستگاه یافت نشد یا دسترسی به پیامک‌ها (READ_SMS) داده نشده است.")
             }
 
             // Summarize SMS
@@ -174,9 +205,9 @@ $cmdToRun
                 val tickets = recentSms.filter { it.category == "TICKET" }
 
                 val summaryBuilder = StringBuilder()
-                summaryBuilder.appendLine("📊 خلاصه پیامک‌های واقعی دریافتی دستگاه ($count پیامک اخیر):")
+                summaryBuilder.appendLine("📊 خلاصه پیامک‌های دریافتی ($count پیامک اخیر):")
                 if (otps.isNotEmpty()) {
-                    summaryBuilder.appendLine("🔑 رمزهای پویا / کدهای ورود: ${otps.size} پیامک (آخرین: «${otps.first().body.take(35)}...»)")
+                    summaryBuilder.appendLine("🔑 رمزهای پویا / کدهای تایید: ${otps.size} پیامک (آخرین: «${otps.first().body.take(35)}...»)")
                 }
                 if (banks.isNotEmpty()) {
                     summaryBuilder.appendLine("💳 پیام‌های تراکنش بانکی: ${banks.size} مورد ثبت شده است.")
@@ -200,20 +231,99 @@ $cmdToRun
 
             return SkillResult.SmsSearchResult(
                 matchedSms = matchedSms,
-                message = if (matchedSms.isNotEmpty()) "تعداد ${matchedSms.size} پیامک واقعی مطابق جستجو پیدا شد."
-                else "پیامکی منطبق با عبارت «$input» در صندوق پیامک‌های دستگاه پیدا نشد."
+                message = if (matchedSms.isNotEmpty()) "تعداد ${matchedSms.size} پیامک مطابق جستجو پیدا شد."
+                else "پیامکی منطبق با عبارت «$input» در پیامک‌های دستگاه پیدا نشد."
             )
         }
 
-        // 4. App Launching Intent
-        if (query.startsWith("open ") || query.startsWith("باز کن") || query.contains("رو باز کن") || query.contains("بازش کن") || query.startsWith("برو تو") || query.startsWith("اجرا کن")) {
+        // 4. Phone Calling Intent
+        val isCallIntent = query.startsWith("call ") || query.contains("زنگ بزن") ||
+            query.contains("تماس بگیر") || query.contains("تماس با") || query.contains("شماره بگیر")
+
+        if (isCallIntent) {
+            // Check if user provided an explicit phone number (digits)
+            val cleanPhone = FuzzyMatcher.normalizePhoneNumber(input)
+            val hasDirectPhone = cleanPhone.length >= 7 && cleanPhone.any { it.isDigit() }
+
+            if (hasDirectPhone) {
+                // Check if belongs to a saved contact
+                val matchedContact = allContacts.firstOrNull {
+                    val cPhone = FuzzyMatcher.normalizePhoneNumber(it.phoneNumber)
+                    cPhone == cleanPhone || cPhone.endsWith(cleanPhone) || cleanPhone.endsWith(cPhone)
+                }
+                if (matchedContact != null) {
+                    return SkillResult.CallContactExact(
+                        matchedContact,
+                        "در حال برقراری تماس با ${matchedContact.displayName} (${matchedContact.phoneNumber})..."
+                    )
+                } else {
+                    return SkillResult.CallPhoneNumberDirect(
+                        phoneNumber = cleanPhone,
+                        displayName = cleanPhone,
+                        message = "در حال برقراری تماس با شماره $cleanPhone..."
+                    )
+                }
+            }
+
+            val contactQuery = query
+                .replace("call", "")
+                .replace("زنگ بزن به", "")
+                .replace("زنگ بزن با", "")
+                .replace("زنگ بزن", "")
+                .replace("تماس بگیر با", "")
+                .replace("تماس بگیر به", "")
+                .replace("تماس بگیر", "")
+                .replace("تماس با", "")
+                .replace("شماره بگیر با", "")
+                .replace("شماره بگیر", "")
+                .replace("رو زنگ بزن", "")
+                .replace("رو تماس بگیر", "")
+                .trim()
+
+            if (allContacts.isEmpty()) {
+                return SkillResult.GeneralAnswer("دفترچه مخاطبین خالی است یا دسترسی به مخاطبین (READ_CONTACTS) تایید نشده است.")
+            }
+
+            val matches = FuzzyMatcher.findTop3Contacts(contactQuery, allContacts)
+            return when {
+                matches.isEmpty() -> {
+                    SkillResult.GeneralAnswer("مخاطبی با نام «$contactQuery» در دفترچه مخاطبین یافت نشد. می‌توانید شماره تماس را بفرمایید.")
+                }
+                matches.first().matchScore >= 0.82f && (matches.size == 1 || matches[0].matchScore - (matches.getOrNull(1)?.matchScore ?: 0f) >= 0.10f) -> {
+                    SkillResult.CallContactExact(
+                        matches.first(),
+                        "در حال تماس با ${matches.first().displayName} (${matches.first().phoneNumber})..."
+                    )
+                }
+                else -> {
+                    val candidateNames = matches.mapIndexed { idx, c -> "${idx + 1}. ${c.displayName}" }.joinToString(" | ")
+                    SkillResult.CallContactNearestChoices(
+                        matches,
+                        "چند مخاطب با نام مشابه پیدا شد: $candidateNames\nبه کدام مورد می‌خواهی زنگ بزنم؟"
+                    )
+                }
+            }
+        }
+
+        // 5. App Launching Intent (Local Search FIRST)
+        val isAppLaunchIntent = query.startsWith("open ") || query.startsWith("launch ") ||
+            query.startsWith("باز کن") || query.contains("رو باز کن") || query.contains("رو بازش کن") ||
+            query.contains("بازش کن") || query.startsWith("برو تو") || query.startsWith("برو توی") ||
+            query.startsWith("اجرا کن") || query.contains("رو بیار") || query.contains("رو اجرا کن")
+
+        if (isAppLaunchIntent) {
             val appQuery = query
                 .replace("open", "")
+                .replace("launch", "")
                 .replace("باز کن", "")
                 .replace("رو باز کن", "")
+                .replace("رو بازش کن", "")
                 .replace("بازش کن", "")
                 .replace("برو توی", "")
                 .replace("برو تو", "")
+                .replace("رو بیار", "")
+                .replace("بیار", "")
+                .replace("رو اجرا کن", "")
                 .replace("اجرا کن", "")
                 .trim()
 
@@ -223,40 +333,8 @@ $cmdToRun
             } else {
                 SkillResult.SearchAppWeb(
                     appQuery,
-                    "برنامه «$appQuery» در بین برنامه‌های نصب‌شده دستگاه یافت نشد. گزینه‌های جستجو در استورها (گوگل‌پلی / بازار / مایکت):"
+                    "برنامه «$appQuery» در بین برنامه‌های نصب‌شده دستگاه یافت نشد. می‌توانید آن را از استورها (گوگل‌پلی / بازار / مایکت) دانلود کنید:"
                 )
-            }
-        }
-
-        // 5. Phone Call Intent
-        if (query.startsWith("call ") || query.contains("زنگ بزن") || query.contains("تماس بگیر") || query.contains("تماس با")) {
-            val contactQuery = query
-                .replace("call", "")
-                .replace("زنگ بزن به", "")
-                .replace("زنگ بزن", "")
-                .replace("تماس بگیر با", "")
-                .replace("تماس بگیر", "")
-                .replace("تماس با", "")
-                .trim()
-
-            if (allContacts.isEmpty()) {
-                return SkillResult.GeneralAnswer("دفترچه تلفن خالی است یا دسترسی به مخاطبین (READ_CONTACTS) تأیید نشده است.")
-            }
-
-            val matches = FuzzyMatcher.findTop3Contacts(contactQuery, allContacts)
-            return when {
-                matches.isEmpty() -> {
-                    SkillResult.GeneralAnswer("مخاطبی با نام «$contactQuery» در دفترچه مخاطبین یافت نشد. لطفاً شماره تلفن را وارد یا اعلام بفرمایید.")
-                }
-                matches.first().matchScore >= 0.82f -> {
-                    SkillResult.CallContactExact(matches.first(), "تماس تلفنی با ${matches.first().displayName} (${matches.first().phoneNumber})")
-                }
-                else -> {
-                    SkillResult.CallContactNearestChoices(
-                        matches,
-                        "چند مخاطب با نام نزدیک پیدا شد. کدام یک مد نظر شماست؟"
-                    )
-                }
             }
         }
 
@@ -317,9 +395,9 @@ $cmdToRun
         }
 
         val answer = when {
-            query.contains("سلام") || query.contains("hello") || query.contains("درود") -> "سلام! مدل محلی برای پاسخ‌های عمومی فعال نشده یا هنوز Load نیست. $modelStatusNotice"
-            query.contains("چطوری") || query.contains("خوبی") -> "در خدمت شما هستم. $modelStatusNotice"
-            else -> "درخواست «$input» نیازمند مدل محلی است. ابتدا یک مدل متنی را دانلود و Load کنید."
+            query.contains("سلام") || query.contains("hello") || query.contains("درود") -> "سلام! در خدمت شما هستم. چطور می‌توانم کمکتان کنم؟ $modelStatusNotice"
+            query.contains("چطوری") || query.contains("خوبی") -> "ممنون، آماده اجرای دستورات شما هستم. $modelStatusNotice"
+            else -> "درخواست «$input» نیازمند مدل محلی است. ابتدا یک مدل متنی را از بخش مدیریت مدل‌ها دانلود و Load کنید."
         }
 
         return SkillResult.GeneralAnswer(answer)

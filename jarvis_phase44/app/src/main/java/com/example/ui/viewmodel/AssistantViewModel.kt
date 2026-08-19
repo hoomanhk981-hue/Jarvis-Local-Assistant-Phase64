@@ -403,6 +403,30 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         if (text.isBlank() && imageUri == null && fileUri == null) return
 
+        // Disambiguation check for active contact choices:
+        val pendingChoices = _uiState.value.contactChoicesForCalling
+        if (pendingChoices.isNotEmpty() && text.isNotBlank()) {
+            val norm = com.example.assistant.FuzzyMatcher.normalizePersianText(text)
+            var chosenIndex = -1
+            if (norm in listOf("اول", "اولی", "اولین", "1", "۱", "شماره 1", "شماره ۱", "مورد اول")) {
+                chosenIndex = 0
+            } else if (norm in listOf("دوم", "دومی", "دومین", "2", "۲", "شماره 2", "شماره ۲", "مورد دوم")) {
+                chosenIndex = 1
+            } else if (norm in listOf("سوم", "سومی", "سومین", "3", "۳", "شماره 3", "شماره ۳", "مورد سوم")) {
+                chosenIndex = 2
+            } else {
+                val matched = com.example.assistant.FuzzyMatcher.findTop3Contacts(text, pendingChoices).firstOrNull()
+                if (matched != null && matched.matchScore >= 0.55f) {
+                    chosenIndex = pendingChoices.indexOfFirst { it.contactId == matched.contactId }
+                }
+            }
+
+            if (chosenIndex in pendingChoices.indices) {
+                confirmContactChoice(pendingChoices[chosenIndex])
+                return
+            }
+        }
+
         val userMsg = ChatMessage(
             sender = "USER",
             text = text,
@@ -470,7 +494,13 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                 addAssistantMessage(result.message)
                 speakText(result.message)
                 repository.logAction(originalText, "PHONE_CALL", result.message, true)
-                dialPhoneNumber(result.contact.phoneNumber)
+                initiatePhoneCall(result.contact.phoneNumber)
+            }
+            is SkillResult.CallPhoneNumberDirect -> {
+                addAssistantMessage(result.message)
+                speakText(result.message)
+                repository.logAction(originalText, "PHONE_CALL", result.message, true)
+                initiatePhoneCall(result.phoneNumber)
             }
             is SkillResult.CallContactNearestChoices -> {
                 _uiState.value = _uiState.value.copy(contactChoicesForCalling = result.top3Choices)
@@ -516,6 +546,21 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                     openSmsApp(result.targetContact.phoneNumber, result.content)
                 }
             }
+            is SkillResult.ExecuteRawTermuxCommand -> {
+                if (result.isDangerous) {
+                    _uiState.value = _uiState.value.copy(
+                        isDangerousCommandPending = true,
+                        pendingDangerousCommand = result.command
+                    )
+                    addAssistantMessage("⚠️ هشدار امنیتی: دستور «${result.command}» پرخطر است و نیاز به تأیید صریح شما دارد.")
+                    return
+                }
+                val output = termuxExecutor.executeCommandText(result.command)
+                _uiState.value = _uiState.value.copy(codeExecutionOutput = output)
+                addAssistantMessage(output)
+                speakText(if (output.contains("موفقیت")) "دستور در ترموکس با موفقیت اجرا شد." else "اجرای دستور به پایان رسید.")
+                repository.logAction(originalText, "TERMUX_COMMAND", output, true)
+            }
             is SkillResult.ExecuteTermuxScript -> {
                 // Save real code file to SAF workspace
                 safFileManager.saveCodeFile(result.generatedFile)
@@ -543,9 +588,9 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
                     codeExecutionOutput = execResult
                 )
 
-                addAssistantMessage(result.message)
+                addAssistantMessage("${result.message}\n\n$execResult")
                 speakText(result.message)
-                repository.logAction(originalText, "TERMUX_EXEC", result.message, true)
+                repository.logAction(originalText, "TERMUX_EXEC", execResult, true)
             }
             is SkillResult.PasswordSaved -> {
                 repository.savePassword(result.appName, "حساب شخصی", result.passwordSecret, "رمزنگاری امن با کلید اختصاصی")
@@ -778,10 +823,11 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun confirmContactChoice(contact: ContactMatch) {
         _uiState.value = _uiState.value.copy(contactChoicesForCalling = emptyList())
-        val msg = "در حال تماس با ${contact.displayName} (${contact.phoneNumber})..."
+        val msg = "در حال برقراری تماس با ${contact.displayName} (${contact.phoneNumber})..."
         addAssistantMessage(msg)
         speakText(msg)
-        dialPhoneNumber(contact.phoneNumber)
+        repository.logAction("تماس تلفنی", "PHONE_CALL", msg, true)
+        initiatePhoneCall(contact.phoneNumber)
     }
 
     fun dismissContactChoices() {
@@ -806,14 +852,44 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private fun dialPhoneNumber(number: String) {
-        try {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    fun initiatePhoneCall(number: String) {
+        val cleanNumber = number.replace(Regex("[^0-9+*#]"), "")
+        if (cleanNumber.isBlank()) {
+            addAssistantMessage("شماره تلفن نامعتبر است.")
+            return
+        }
+
+        val app = getApplication<Application>()
+        val hasCallPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            app, android.Manifest.permission.CALL_PHONE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (hasCallPermission) {
+            try {
+                val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(cleanNumber)}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                app.startActivity(callIntent)
+            } catch (e: Exception) {
+                try {
+                    val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(cleanNumber)}")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    app.startActivity(dialIntent)
+                } catch (_: Exception) {}
             }
-            getApplication<Application>().startActivity(intent)
-        } catch (e: Exception) {
-            // Dial fallback
+        } else {
+            _uiState.value = _uiState.value.copy(
+                pendingToolPermissions = listOf(android.Manifest.permission.CALL_PHONE),
+                pendingPermissionTool = "make_call",
+                pendingPermissionArguments = mapOf("number" to cleanNumber)
+            )
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(cleanNumber)}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                app.startActivity(dialIntent)
+            } catch (_: Exception) {}
         }
     }
 

@@ -182,22 +182,37 @@ class AssistantRepository(private val context: Context) {
 
     /**
      * Reads genuine installed apps on the device using PackageManager.
-     * Never returns fake mock apps.
+     * Combines launcher activities with installed packages for complete resolution.
      */
     fun getInstalledApps(): List<InstalledAppInfo> {
         val pm = context.packageManager
-        val apps = mutableListOf<InstalledAppInfo>()
+        val appsMap = LinkedHashMap<String, InstalledAppInfo>()
         try {
+            // 1. Query all launchable activities (standard launcher apps)
+            val launchIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            val resolveInfos = pm.queryIntentActivities(launchIntent, 0)
+            for (resolveInfo in resolveInfos) {
+                val pkgName = resolveInfo.activityInfo.packageName
+                val name = resolveInfo.loadLabel(pm)?.toString()?.trim() ?: pkgName
+                val isSystem = (resolveInfo.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                appsMap[pkgName] = InstalledAppInfo(appName = name, packageName = pkgName, isSystemApp = isSystem)
+            }
+
+            // 2. Also query all installed applications to capture background tools
             val installedPackages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
             for (appInfo in installedPackages) {
-                val name = pm.getApplicationLabel(appInfo).toString()
-                val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                apps.add(InstalledAppInfo(appName = name, packageName = appInfo.packageName, isSystemApp = isSystem))
+                if (!appsMap.containsKey(appInfo.packageName)) {
+                    val name = pm.getApplicationLabel(appInfo).toString().trim()
+                    val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                    appsMap[appInfo.packageName] = InstalledAppInfo(appName = name, packageName = appInfo.packageName, isSystemApp = isSystem)
+                }
             }
         } catch (e: Exception) {
-            // Truthful: return empty list on error
+            // Return collected apps
         }
-        return apps
+        return appsMap.values.toList()
     }
 
     /**

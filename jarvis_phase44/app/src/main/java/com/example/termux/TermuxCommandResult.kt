@@ -8,7 +8,8 @@ data class TermuxCommandResult(
     val errorCode: Int? = null,
     val errorMessage: String? = null,
     val stdoutTruncated: Boolean = false,
-    val stderrTruncated: Boolean = false
+    val stderrTruncated: Boolean = false,
+    val timedOut: Boolean = false
 ) {
-    val success: Boolean get() = exitCode == 0 && errorCode == null
+    val success: Boolean get() = exitCode == 0 && errorCode == null && !timedOut
 }
