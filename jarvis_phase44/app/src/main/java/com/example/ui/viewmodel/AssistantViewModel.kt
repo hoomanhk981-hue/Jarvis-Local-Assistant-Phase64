@@ -826,7 +826,9 @@ class AssistantViewModel(application: Application) : AndroidViewModel(applicatio
         val msg = "در حال برقراری تماس با ${contact.displayName} (${contact.phoneNumber})..."
         addAssistantMessage(msg)
         speakText(msg)
-        repository.logAction("تماس تلفنی", "PHONE_CALL", msg, true)
+        viewModelScope.launch {
+            repository.logAction("تماس تلفنی", "PHONE_CALL", msg, true)
+        }
         initiatePhoneCall(contact.phoneNumber)
     }
 
